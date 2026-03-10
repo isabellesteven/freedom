@@ -1,0 +1,61 @@
+---
+
+# 2) DSL v1 grammar (EBNF)
+
+This grammar is intentionally minimal and line-friendly.
+
+## 2.1 Lexical tokens
+
+```ebnf
+identifier  = letter , { letter | digit | "_" } ;
+integer     = [ "-" ] , digit , { digit } ;
+float       = [ "-" ] , digit , { digit } , "." , digit , { digit } ;
+number      = float | integer ;
+string      = '"' , { character - '"' } , '"' ;
+
+ws          = { " " | "\t" } ;
+newline     = "\r\n" | "\n" ;
+comment     = "#" , { character - newline } ;
+```
+
+## 2.2 Grammar
+
+```ebnf
+file        = { ws , ( statement | comment ) , ws , newline } ;
+
+statement   = graph_decl
+            | graph_end
+            | io_decl
+            | node_decl
+            | connect_stmt ;
+
+graph_decl  = "graph" , ws , string ;
+graph_end   = "end" ;
+
+io_decl     = "io" , ws , ( "input" | "output" ) , ws ,
+              identifier , ws , ":" , ws , format_spec ;
+
+format_spec = sample_fmt , "@" , integer , "k" ,
+              ws , "block" , "=" , integer ,
+              ws , "ch" , "=" , integer ;
+
+sample_fmt  = "f32" | "s16" ;
+
+node_decl   = "node" , ws , identifier , ws , ":" , ws , identifier ,
+              [ ws , "(" , ws , param_list , ws , ")" ] ;
+
+param_list  = param , { ws , "," , ws , param } ;
+param       = identifier , ws , "=" , ws , value ;
+value       = number | string ;
+
+connect_stmt= "connect" , ws , endpoint , ws , "->" , ws , endpoint ;
+
+endpoint    = identifier , [ "." , identifier ] ;
+```
+
+Notes:
+
+* `endpoint` allows `mic` or `eq.in`. For IO identifiers without `.pin`, the tool can treat them as default pin (e.g., `out` or `in`) by convention.
+* Module class name is the second identifier in `node_decl` (e.g., `Gain`, `Biquad`).
+* Params are key/value; values are numbers or strings.
+
