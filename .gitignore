@@ -11,3 +11,5 @@ tests/golden/gain_chain.disasm.txt
 tools/compiler/__pycache__/__init__.cpython-312.pyc
 tools/compiler/__pycache__/compiler.cpython-312.pyc
 tools/compiler/__pycache__/dsl_parser.cpython-312.pyc
+temp_validate/test_disasm_golden.exe
+temp_validate/test_graph_memory_requirements.exe
