@@ -1,0 +1,13 @@
+out.disasm.txt
+gcc_err.txt
+out/gain_chain.disasm.txt
+out/gain_chain.grph
+temp_validate/disasm_graphcfg.exe
+temp_validate/out_graphcfg.disasm.txt
+temp_validate/test_disasm_golden_graphcfg.exe
+temp_validate/out_graphcfg.grph
+out.grph
+tests/golden/gain_chain.disasm.txt
+tools/compiler/__pycache__/__init__.cpython-312.pyc
+tools/compiler/__pycache__/compiler.cpython-312.pyc
+tools/compiler/__pycache__/dsl_parser.cpython-312.pyc
