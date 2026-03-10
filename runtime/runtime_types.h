@@ -1,0 +1,45 @@
+#ifndef FREEDOM_RUNTIME_TYPES_H
+#define FREEDOM_RUNTIME_TYPES_H
+
+#include <stdint.h>
+
+#include "modules/module_abi.h"
+
+typedef struct RuntimeHeap {
+  uint32_t heap_id;
+  uint32_t size_bytes;
+  void *base;
+} RuntimeHeap;
+
+typedef struct RuntimeBufferView {
+  uint32_t buffer_id;
+  uint32_t heap_index;
+  uint32_t offset_bytes;
+  uint32_t size_bytes;
+  uint16_t channels;
+  uint16_t frames;
+  uint16_t stride_bytes;
+  uint8_t format;
+  uint8_t buffer_type;
+} RuntimeBufferView;
+
+typedef struct RuntimeBufferBinding {
+  uint32_t buffer_id;
+} RuntimeBufferBinding;
+
+typedef struct RuntimeNodeInstance {
+  uint32_t node_id;
+  const AweModuleDescriptor *module;
+  void *state;
+  RuntimeBufferBinding *inputs;
+  uint32_t num_inputs;
+  RuntimeBufferBinding *outputs;
+  uint32_t num_outputs;
+} RuntimeNodeInstance;
+
+typedef struct RuntimeScheduleEntry {
+  uint32_t node_id;
+  uint32_t node_index;
+} RuntimeScheduleEntry;
+
+#endif
