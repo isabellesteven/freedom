@@ -6,6 +6,7 @@ BIN_DIR := bin
 DISASM_BIN := $(BIN_DIR)/disasm
 TEST_BIN := $(BIN_DIR)/test_disasm_golden
 GRAPH_REQ_TEST_BIN := $(BIN_DIR)/test_graph_memory_requirements
+BLOB_CURSOR_TEST_BIN := $(BIN_DIR)/test_blob_cursor
 
 .PHONY: all disasm test test-unit test-cli-golden clean
 
@@ -22,12 +23,16 @@ $(DISASM_BIN): runtime/loader/blob.c runtime/loader/blob.h tools/disasm_main.c |
 $(TEST_BIN): runtime/loader/blob.c runtime/loader/blob.h tests/test_disasm_golden.c | $(BIN_DIR)
 	$(CC) $(CFLAGS) runtime/loader/blob.c tests/test_disasm_golden.c -o $(TEST_BIN)
 
-$(GRAPH_REQ_TEST_BIN): runtime/loader/blob.c runtime/loader/blob.h runtime/runtime_types.h runtime/engine/graph_instance.h runtime/engine/graph_instance.c modules/module_abi.h modules/gain/gain.c tests/test_graph_memory_requirements.c | $(BIN_DIR)
-	$(CC) $(CFLAGS) runtime/loader/blob.c runtime/engine/graph_instance.c modules/gain/gain.c tests/test_graph_memory_requirements.c -o $(GRAPH_REQ_TEST_BIN)
+$(GRAPH_REQ_TEST_BIN): runtime/loader/blob.c runtime/loader/blob.h runtime/loader/blob_cursor.h runtime/loader/blob_cursor.c runtime/runtime_types.h runtime/engine/graph_instance.h runtime/engine/graph_instance.c modules/module_abi.h modules/gain/gain.c tests/test_graph_memory_requirements.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) runtime/loader/blob.c runtime/loader/blob_cursor.c runtime/engine/graph_instance.c modules/gain/gain.c tests/test_graph_memory_requirements.c -o $(GRAPH_REQ_TEST_BIN)
 
-test-unit: $(TEST_BIN) $(GRAPH_REQ_TEST_BIN)
+$(BLOB_CURSOR_TEST_BIN): runtime/loader/blob_cursor.h runtime/loader/blob_cursor.c tests/test_blob_cursor.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) runtime/loader/blob_cursor.c tests/test_blob_cursor.c -o $(BLOB_CURSOR_TEST_BIN)
+
+test-unit: $(TEST_BIN) $(GRAPH_REQ_TEST_BIN) $(BLOB_CURSOR_TEST_BIN)
 	$(TEST_BIN)
 	$(GRAPH_REQ_TEST_BIN)
+	$(BLOB_CURSOR_TEST_BIN)
 
 test-cli-golden: disasm
 	$(SHELL) tests/ci_cli_golden.sh

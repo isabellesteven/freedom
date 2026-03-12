@@ -6,6 +6,11 @@ Below is what `protocol_v1.md` should contain, structured as an engineering-read
 
 # protocol_v1.md — Contents
 
+Implementation status:
+
+* this document specifies a planned protocol surface
+* the current repository does not yet implement the runtime protocol described here
+
 This document defines the **control and tuning protocol** between:
 
 * PC tooling (CLI / GUI / automation)

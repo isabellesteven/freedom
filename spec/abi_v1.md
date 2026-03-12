@@ -213,7 +213,8 @@ Usage rules:
 | alloc_fn  | no                   |
 | free_fn   | no                   |
 
-Memory allocation may be used during `init()`.
+Allocator hooks remain present in the ABI struct, but the current runtime design is strictly no dynamic allocation.
+Runtime and modules must not rely on `alloc_fn` or `free_fn`.
 
 ---
 
@@ -434,7 +435,7 @@ node.in  → inputs[0]
 
 # 18. Real-Time Safety Rules
 
-Inside `process()` modules must not:
+Inside `init()`, `process()`, `set_param()`, `get_param()`, and `deinit()` modules must not:
 
 * allocate memory
 * acquire locks

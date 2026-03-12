@@ -128,6 +128,11 @@ GraphStatus graph_bind_from_blob(
     GraphInstance *out_graph);
 ```
 
+Implementation status:
+
+* currently implemented: `graph_get_memory_requirements(...)`
+* planned, not yet implemented in this repo: `graph_bind_from_blob(...)`
+
 During binding, the runtime:
 
 * validates blob sections and counts

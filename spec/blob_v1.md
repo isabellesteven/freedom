@@ -224,10 +224,11 @@ Example heap kinds:
 
 | Value | Meaning   |
 | ----- | --------- |
-| 0     | general   |
-| 1     | state     |
-| 2     | parameter |
-| 3     | IO        |
+| 0     | SRAM      |
+| 1     | PSRAM     |
+| 2     | PARAM     |
+| 3     | STATE     |
+| 4     | IO        |
 
 ---
 
@@ -395,6 +396,14 @@ repeat node_count
 ```
 
 The encoding of `param_data` is module specific.
+
+Implementation note:
+
+* current compiler output for `Gain` encodes node init as:
+  * `u32 param_id (=1)`
+  * `f32 gain_db`
+* current `modules/gain/gain.c` `gain_init()` still expects a raw `f32`
+* treat this as a temporary implementation mismatch, not the intended long-term contract
 
 ---
 

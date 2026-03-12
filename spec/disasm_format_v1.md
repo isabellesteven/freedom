@@ -51,11 +51,15 @@ This is what your C disassembler should print for the compiled blob, in a stable
 
 ```txt
 GRPH v1.0  abi=PCNA  uuid=00000000-0000-0000-0000-000000000001
-Sections: REQUIRES HEAPS BUFFERS NODES SCHEDULE PARAM_DEFAULTS
+Sections: REQUIRES GRAPH_CONFIG HEAPS BUFFERS NODES SCHEDULE PARAM_DEFAULTS
 
 [REQUIRES]
   count=1
   module 0x00001001 ver=1.0 caps=0x00000000   ; Gain
+
+[GRAPH_CONFIG]
+  sample_rate_hz=48000
+  block_multiple_N=1
 
 [HEAPS]
   heap id=1 kind=IO    bytes=768 align=16
@@ -82,6 +86,9 @@ Sections: REQUIRES HEAPS BUFFERS NODES SCHEDULE PARAM_DEFAULTS
   ok
 ```
 
+`state_bytes` and `align` above are example blob fields as printed by the current disassembler.
+Current runtime sizing uses module descriptors for actual state sizing.
+
 You don’t have to use these exact IDs—what matters is that:
 
 * it’s deterministic,
@@ -90,7 +97,7 @@ You don’t have to use these exact IDs—what matters is that:
 
 ---
 
-## 3.3 Reference “slightly richer” graph (optional second example)
+## 3.3 Reference “slightly richer” graph (future example, not supported by the current compiler)
 
 If you want a better test of buffer reuse, add 2 nodes:
 

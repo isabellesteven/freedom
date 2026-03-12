@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "runtime/loader/blob_cursor.h"
 #include "runtime/runtime_types.h"
 
 typedef struct BlobHeapInfo {
@@ -23,6 +24,8 @@ typedef struct BlobScheduleOp {
   uint8_t n_out;
 } BlobScheduleOp;
 
+/* Keep direct little-endian reads for small, local field access.
+   Use BlobCursor for indexed records and variable-length section walks. */
 static uint32_t rd_u32(const uint8_t *p) {
   return (uint32_t)(p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
                     ((uint32_t)p[3] << 24));
@@ -43,46 +46,51 @@ static uint32_t metadata_align(void) {
 
 static int load_heap_info(const BlobView *blob, uint32_t index,
                           BlobHeapInfo *out_heap) {
-  const uint8_t *p;
+  BlobCursor cur;
+  BlobCursor record;
   uint32_t count;
-  if (!blob || !blob->heaps || !out_heap || blob->heaps->payload_bytes < 4u) {
+  if (!blob || !blob->heaps || !out_heap) {
     return 0;
   }
-  p = blob->heaps->payload;
-  count = rd_u32(p);
-  if (index >= count) {
+  if (!cursor_init(&cur, blob->heaps->payload, blob->heaps->payload_bytes) ||
+      !cursor_read_u32(&cur, &count) || index >= count) {
     return 0;
   }
-  p += 4u + (size_t)index * 16u;
-  if (blob->heaps->payload_bytes < 4u + ((index + 1u) * 16u)) {
+  if (!cursor_slice(&cur, index * 16u, 16u, &record)) {
     return 0;
   }
-  out_heap->heap_id = rd_u32(p + 0);
-  out_heap->heap_bytes = rd_u32(p + 8);
-  out_heap->heap_align = rd_u32(p + 12);
+  /* HEAPS record: u32 heap_id, u32 reserved, u32 heap_bytes, u32 heap_align */
+  if (!cursor_get_u32_at(&record, 0u, &out_heap->heap_id) ||
+      !cursor_get_u32_at(&record, 8u, &out_heap->heap_bytes) ||
+      !cursor_get_u32_at(&record, 12u, &out_heap->heap_align)) {
+    return 0;
+  }
   return 1;
 }
 
 static int find_heap_index(const BlobView *blob, uint32_t heap_id,
                            uint32_t *out_index) {
-  const uint8_t *p;
+  BlobCursor cur;
+  BlobCursor record;
   uint32_t count;
   uint32_t i;
-  if (!blob || !blob->heaps || !out_index || blob->heaps->payload_bytes < 4u) {
+  uint32_t candidate_id;
+  if (!blob || !blob->heaps || !out_index) {
     return 0;
   }
-  p = blob->heaps->payload;
-  count = rd_u32(p);
-  p += 4;
+  if (!cursor_init(&cur, blob->heaps->payload, blob->heaps->payload_bytes) ||
+      !cursor_read_u32(&cur, &count)) {
+    return 0;
+  }
   for (i = 0; i < count; ++i) {
-    if ((size_t)(p - blob->heaps->payload) + 16u > blob->heaps->payload_bytes) {
+    if (!cursor_slice(&cur, i * 16u, 16u, &record) ||
+        !cursor_get_u32_at(&record, 0u, &candidate_id)) {
       return 0;
     }
-    if (rd_u32(p) == heap_id) {
+    if (candidate_id == heap_id) {
       *out_index = i;
       return 1;
     }
-    p += 16;
   }
   return 0;
 }
@@ -90,138 +98,153 @@ static int find_heap_index(const BlobView *blob, uint32_t heap_id,
 static int load_buffer_record(const BlobView *blob, uint32_t index,
                               uint32_t *out_heap_id, uint32_t *out_offset,
                               uint32_t *out_size) {
-  const uint8_t *p;
+  BlobCursor cur;
+  BlobCursor record;
   uint32_t count;
-  if (!blob || !blob->buffers || !out_heap_id || !out_offset || !out_size ||
-      blob->buffers->payload_bytes < 4u) {
+  if (!blob || !blob->buffers || !out_heap_id || !out_offset || !out_size) {
     return 0;
   }
-  p = blob->buffers->payload;
-  count = rd_u32(p);
-  if (index >= count) {
+  if (!cursor_init(&cur, blob->buffers->payload, blob->buffers->payload_bytes) ||
+      !cursor_read_u32(&cur, &count) || index >= count) {
     return 0;
   }
-  p += 4u + (size_t)index * 32u;
-  if (blob->buffers->payload_bytes < 4u + ((index + 1u) * 32u)) {
+  if (!cursor_slice(&cur, index * 32u, 32u, &record)) {
     return 0;
   }
-  *out_heap_id = rd_u32(p + 8);
-  *out_offset = rd_u32(p + 12);
-  *out_size = rd_u32(p + 16);
+  /* BUFFERS record: u32 id, u8/u8/u16, u32 heap_id, u32 offset, u32 size, ... */
+  if (!cursor_get_u32_at(&record, 8u, out_heap_id) ||
+      !cursor_get_u32_at(&record, 12u, out_offset) ||
+      !cursor_get_u32_at(&record, 16u, out_size)) {
+    return 0;
+  }
   return 1;
 }
 
 static int load_node_info(const BlobView *blob, uint32_t index,
                           BlobNodeInfo *out_node) {
-  const uint8_t *p;
-  const uint8_t *end;
+  BlobCursor cur;
+  BlobCursor header;
   uint32_t count;
   uint32_t i;
-  if (!blob || !blob->nodes || !out_node || blob->nodes->payload_bytes < 4u) {
+  uint32_t init_bytes;
+  uint32_t record_bytes;
+  if (!blob || !blob->nodes || !out_node) {
     return 0;
   }
-  p = blob->nodes->payload;
-  end = blob->nodes->payload + blob->nodes->payload_bytes;
-  count = rd_u32(p);
-  p += 4;
-  if (index >= count) {
+  if (!cursor_init(&cur, blob->nodes->payload, blob->nodes->payload_bytes) ||
+      !cursor_read_u32(&cur, &count) || index >= count) {
     return 0;
   }
   for (i = 0; i < count; ++i) {
-    uint32_t init_bytes;
-    if ((size_t)(end - p) < 32u) {
+    if (!cursor_slice(&cur, 0u, 32u, &header) ||
+        !cursor_get_u32_at(&header, 24u, &init_bytes)) {
       return 0;
     }
-    init_bytes = rd_u32(p + 24);
-    if ((size_t)(end - p) < 32u + init_bytes) {
+    record_bytes = 32u + init_bytes;
+    if (!cursor_slice(&cur, 0u, record_bytes, &header)) {
       return 0;
     }
     if (i == index) {
-      out_node->node_id = rd_u32(p + 0);
-      out_node->module_id = rd_u32(p + 4);
-      out_node->state_align = rd_u32(p + 20);
+      /* NODES header: node_id, module_id, state_heap_id, state_offset,
+         state_bytes, state_align, init_bytes, param_block_bytes */
+      if (!cursor_get_u32_at(&header, 0u, &out_node->node_id) ||
+          !cursor_get_u32_at(&header, 4u, &out_node->module_id) ||
+          !cursor_get_u32_at(&header, 20u, &out_node->state_align)) {
+        return 0;
+      }
       return 1;
     }
-    p += 32u + init_bytes;
+    if (!cursor_skip(&cur, record_bytes)) {
+      return 0;
+    }
   }
   return 0;
 }
 
 static int find_node_index(const BlobView *blob, uint32_t node_id,
                            uint32_t *out_index) {
-  const uint8_t *p;
-  const uint8_t *end;
+  BlobCursor cur;
+  BlobCursor header;
   uint32_t count;
   uint32_t i;
-  if (!blob || !blob->nodes || !out_index || blob->nodes->payload_bytes < 4u) {
+  uint32_t init_bytes;
+  uint32_t record_node_id;
+  uint32_t record_bytes;
+  if (!blob || !blob->nodes || !out_index) {
     return 0;
   }
-  p = blob->nodes->payload;
-  end = blob->nodes->payload + blob->nodes->payload_bytes;
-  count = rd_u32(p);
-  p += 4;
+  if (!cursor_init(&cur, blob->nodes->payload, blob->nodes->payload_bytes) ||
+      !cursor_read_u32(&cur, &count)) {
+    return 0;
+  }
   for (i = 0; i < count; ++i) {
-    uint32_t init_bytes;
-    if ((size_t)(end - p) < 32u) {
+    if (!cursor_slice(&cur, 0u, 32u, &header) ||
+        !cursor_get_u32_at(&header, 24u, &init_bytes) ||
+        !cursor_get_u32_at(&header, 0u, &record_node_id)) {
       return 0;
     }
-    init_bytes = rd_u32(p + 24);
-    if ((size_t)(end - p) < 32u + init_bytes) {
+    record_bytes = 32u + init_bytes;
+    if (!cursor_slice(&cur, 0u, record_bytes, &header)) {
       return 0;
     }
-    if (rd_u32(p + 0) == node_id) {
+    if (record_node_id == node_id) {
       *out_index = i;
       return 1;
     }
-    p += 32u + init_bytes;
+    if (!cursor_skip(&cur, record_bytes)) {
+      return 0;
+    }
   }
   return 0;
 }
 
 static int schedule_op_count(const BlobView *blob, uint32_t *out_count) {
-  if (!blob || !blob->schedule || !out_count || blob->schedule->payload_bytes < 4u) {
+  BlobCursor cur;
+  if (!blob || !blob->schedule || !out_count) {
     return 0;
   }
-  *out_count = rd_u32(blob->schedule->payload);
-  return 1;
+  return cursor_init(&cur, blob->schedule->payload, blob->schedule->payload_bytes) &&
+         cursor_read_u32(&cur, out_count);
 }
 
 static int load_schedule_op(const BlobView *blob, uint32_t index,
                             BlobScheduleOp *out_op) {
-  const uint8_t *p;
-  const uint8_t *end;
+  BlobCursor cur;
+  BlobCursor header;
   uint32_t count;
   uint32_t i;
+  uint32_t node_id;
+  uint32_t op_bytes;
+  uint32_t io_words;
   if (!blob || !blob->schedule || !out_op || blob->schedule->payload_bytes < 4u) {
     return 0;
   }
-  p = blob->schedule->payload;
-  end = blob->schedule->payload + blob->schedule->payload_bytes;
-  count = rd_u32(p);
-  p += 4;
-  if (index >= count) {
+  if (!cursor_init(&cur, blob->schedule->payload, blob->schedule->payload_bytes) ||
+      !cursor_read_u32(&cur, &count) || index >= count) {
     return 0;
   }
   for (i = 0; i < count; ++i) {
-    uint8_t n_in;
-    uint8_t n_out;
-    size_t op_bytes;
-    if ((size_t)(end - p) < 8u) {
+    if (!cursor_slice(&cur, 0u, 8u, &header)) {
       return 0;
     }
-    n_in = p[1];
-    n_out = p[2];
-    op_bytes = 8u + (size_t)(n_in + n_out) * 4u;
-    if ((size_t)(end - p) < op_bytes) {
+    out_op->n_in = header.data[1];
+    out_op->n_out = header.data[2];
+    if (!cursor_get_u32_at(&header, 4u, &node_id)) {
+      return 0;
+    }
+    io_words = (uint32_t)out_op->n_in + (uint32_t)out_op->n_out;
+    op_bytes = 8u + (io_words * 4u);
+    if (!cursor_slice(&cur, 0u, op_bytes, &header)) {
       return 0;
     }
     if (i == index) {
-      out_op->n_in = n_in;
-      out_op->n_out = n_out;
-      out_op->node_id = rd_u32(p + 4);
+      /* SCHEDULE op header: op_type, n_in, n_out, flags, node_id */
+      out_op->node_id = node_id;
       return 1;
     }
-    p += op_bytes;
+    if (!cursor_skip(&cur, op_bytes)) {
+      return 0;
+    }
   }
   return 0;
 }
@@ -311,35 +334,36 @@ static GraphStatus accumulate_module_state_bytes(const BlobView *blob,
                                                  const ModuleRegistry *registry,
                                                  uint32_t *out_node_count,
                                                  uint32_t *out_state_bytes) {
-  const uint8_t *p;
-  const uint8_t *end;
+  BlobCursor cur;
+  BlobCursor header;
   uint32_t count;
   uint32_t total;
   uint32_t i;
+  uint32_t module_id;
+  uint32_t state_align;
+  uint32_t init_bytes;
+  uint32_t record_bytes;
   if (!blob || !blob->nodes || !registry || !out_node_count || !out_state_bytes ||
       blob->nodes->payload_bytes < 4u) {
     return GRAPH_STATUS_INVALID_BLOB;
   }
 
-  p = blob->nodes->payload;
-  end = blob->nodes->payload + blob->nodes->payload_bytes;
-  count = rd_u32(p);
-  p += 4;
+  if (!cursor_init(&cur, blob->nodes->payload, blob->nodes->payload_bytes) ||
+      !cursor_read_u32(&cur, &count)) {
+    return GRAPH_STATUS_INVALID_BLOB;
+  }
   total = 0u;
 
   for (i = 0; i < count; ++i) {
-    uint32_t module_id;
-    uint32_t state_align;
-    uint32_t init_bytes;
     const AweModuleDescriptor *desc;
-
-    if ((size_t)(end - p) < 32u) {
+    if (!cursor_slice(&cur, 0u, 32u, &header) ||
+        !cursor_get_u32_at(&header, 4u, &module_id) ||
+        !cursor_get_u32_at(&header, 20u, &state_align) ||
+        !cursor_get_u32_at(&header, 24u, &init_bytes)) {
       return GRAPH_STATUS_INVALID_BLOB;
     }
-    module_id = rd_u32(p + 4);
-    state_align = rd_u32(p + 20);
-    init_bytes = rd_u32(p + 24);
-    if ((size_t)(end - p) < 32u + init_bytes) {
+    record_bytes = 32u + init_bytes;
+    if (!cursor_slice(&cur, 0u, record_bytes, &header)) {
       return GRAPH_STATUS_INVALID_BLOB;
     }
 
@@ -351,11 +375,9 @@ static GraphStatus accumulate_module_state_bytes(const BlobView *blob,
     total = align_up_u32(total,
                          desc->state_align != 0u ? desc->state_align : state_align);
     total += desc->state_bytes;
-    p += 32u + init_bytes;
-  }
-
-  if (p != end) {
-    return GRAPH_STATUS_INVALID_BLOB;
+    if (!cursor_skip(&cur, record_bytes)) {
+      return GRAPH_STATUS_INVALID_BLOB;
+    }
   }
 
   *out_node_count = count;
