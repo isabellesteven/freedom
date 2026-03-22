@@ -1,3 +1,5 @@
+/* Verifies low-level BlobCursor reads, slicing, skipping, and bounds handling.
+   It protects the section-reader primitives used by blob parsing and runtime binding. */
 #include "runtime/loader/blob_cursor.h"
 
 #include <stdint.h>

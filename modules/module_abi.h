@@ -44,26 +44,6 @@ typedef enum
 
 
 /* ================================================================
-   BUFFER VIEW
-   ================================================================ */
-
-typedef struct AweBufView
-{
-    void*    data;
-
-    uint32_t frames;
-    uint16_t channels;
-
-    uint8_t  format;
-    uint8_t  flags;
-
-    uint16_t stride_bytes;
-    uint16_t reserved;
-
-} AweBufView;
-
-
-/* ================================================================
    PROCESS CONTEXT
    ================================================================ */
 
@@ -139,10 +119,8 @@ typedef struct AweModuleVTable
 
     AweStatus (*process)(
         void* state,
-        const AweBufView* inputs,
-        uint32_t n_in,
-        AweBufView* outputs,
-        uint32_t n_out,
+        const void* const* inputs,
+        void* const* outputs,
         const AweProcessCtx* ctx);
 
     AweStatus (*set_param)(

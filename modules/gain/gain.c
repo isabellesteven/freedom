@@ -45,6 +45,27 @@ static AweStatus read_f32_param(const void* data, uint32_t size_bytes, float* ou
     return AWE_OK;
 }
 
+static AweStatus read_gain_init_blob(const void* data, uint32_t size_bytes, float* out_value)
+{
+    const uint8_t* p = (const uint8_t*)data;
+
+    if (data == NULL || out_value == NULL)
+        return AWE_EINVAL;
+
+    if (size_bytes == sizeof(float))
+        return read_f32_param(data, size_bytes, out_value);
+
+    /* Temporary compatibility path for compiler-emitted init blobs:
+       [u32 param_id=1][f32 gain_db]. */
+    if (size_bytes == 8u && p[0] == (uint8_t)GAIN_PARAM_GAIN_DB && p[1] == 0u &&
+        p[2] == 0u && p[3] == 0u)
+    {
+        return read_f32_param(p + 4, sizeof(float), out_value);
+    }
+
+    return AWE_EINVAL;
+}
+
 /* ------------------------------------------------------------------
    ABI functions
    ------------------------------------------------------------------ */
@@ -71,7 +92,7 @@ static AweStatus gain_init(
     if (init_blob != NULL && init_bytes != 0)
     {
         float gain_db = 0.0f;
-        AweStatus st = read_f32_param(init_blob, init_bytes, &gain_db);
+        AweStatus st = read_gain_init_blob(init_blob, init_bytes, &gain_db);
         if (st != AWE_OK)
             return st;
 
@@ -84,56 +105,26 @@ static AweStatus gain_init(
 
 static AweStatus gain_process(
     void* state,
-    const AweBufView* inputs,
-    uint32_t n_in,
-    AweBufView* outputs,
-    uint32_t n_out,
+    const void* const* inputs,
+    void* const* outputs,
     const AweProcessCtx* ctx)
 {
-    (void)ctx;
-
-    if (state == NULL || inputs == NULL || outputs == NULL)
+    if (state == NULL || inputs == NULL || outputs == NULL || ctx == NULL)
         return AWE_EINVAL;
-
-    if (n_in != 1 || n_out != 1)
-        return AWE_EINVAL;
-
-    const AweBufView* in = &inputs[0];
-    AweBufView* out = &outputs[0];
     const GainState* s = (const GainState*)state;
-
-    if (in->data == NULL || out->data == NULL)
-        return AWE_EINVAL;
-
-    if (in->format != AWE_FMT_F32 || out->format != AWE_FMT_F32)
-        return AWE_ENOTSUP;
-
-    if (in->channels != out->channels || in->frames != out->frames)
-        return AWE_EINVAL;
-
-    if ((in->stride_bytes != 0 && in->stride_bytes != sizeof(float)) ||
-        (out->stride_bytes != 0 && out->stride_bytes != sizeof(float)))
-    {
-        return AWE_ENOTSUP;
-    }
-
-    const uint32_t frames = in->frames;
-    const uint32_t channels = in->channels;
+    const float* in;
+    float* out;
+    const uint32_t frames = ctx->block_frames;
     const float gain = s->gain_lin;
 
-    /* v1 planar, tightly packed by channel:
-       [ch0 frames][ch1 frames]... */
-    const float* in_base = (const float*)in->data;
-    float* out_base = (float*)out->data;
+    if (inputs[0] == NULL || outputs[0] == NULL)
+        return AWE_EINVAL;
 
-    for (uint32_t ch = 0; ch < channels; ++ch)
-    {
-        const float* in_ch = in_base + (size_t)ch * frames;
-        float* out_ch = out_base + (size_t)ch * frames;
+    in = (const float*)inputs[0];
+    out = (float*)outputs[0];
 
-        for (uint32_t i = 0; i < frames; ++i)
-            out_ch[i] = in_ch[i] * gain;
-    }
+    for (uint32_t i = 0; i < frames; ++i)
+        out[i] = in[i] * gain;
 
     return AWE_OK;
 }

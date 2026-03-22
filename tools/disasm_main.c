@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int load_file(const char *path, unsigned char **out, size_t *out_bytes) {
   FILE *f;
@@ -55,18 +56,25 @@ int main(int argc, char **argv) {
   size_t blob_bytes = 0;
   char err[256];
   int rc;
+  grph_blob_text_mode mode = GRPH_BLOB_TEXT_HUMAN;
+  const char *path;
 
-  if (argc != 2) {
-    fprintf(stderr, "usage: disasm <blob.grph>\n");
+  if (argc == 3 && strcmp(argv[1], "--canonical") == 0) {
+    mode = GRPH_BLOB_TEXT_CANONICAL;
+    path = argv[2];
+  } else if (argc == 2) {
+    path = argv[1];
+  } else {
+    fprintf(stderr, "usage: disasm [--canonical] <blob.grph>\n");
     return 2;
   }
 
-  if (load_file(argv[1], &blob, &blob_bytes) != 0) {
-    fprintf(stderr, "error: failed to read '%s'\n", argv[1]);
+  if (load_file(path, &blob, &blob_bytes) != 0) {
+    fprintf(stderr, "error: failed to read '%s'\n", path);
     return 1;
   }
 
-  rc = grph_blob_disassemble(stdout, blob, blob_bytes, err, sizeof(err));
+  rc = grph_blob_dump(stdout, blob, blob_bytes, mode, err, sizeof(err));
   free(blob);
 
   if (rc != GRPH_BLOB_OK) {

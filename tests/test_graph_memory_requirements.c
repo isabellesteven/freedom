@@ -1,3 +1,5 @@
+/* Verifies graph_get_memory_requirements() against a known reference blob.
+   It checks aggregate metadata, state, and heap sizing before any binding occurs. */
 #include "runtime/engine/graph_instance.h"
 
 #include <stdint.h>

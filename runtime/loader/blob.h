@@ -68,11 +68,23 @@ typedef struct grph_blob_view {
   grph_graph_config graph_config_values;
 } grph_blob_view;
 
+typedef enum grph_blob_text_mode {
+  GRPH_BLOB_TEXT_HUMAN = 0,
+  GRPH_BLOB_TEXT_CANONICAL = 1,
+} grph_blob_text_mode;
+
 int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
                     char *err, size_t err_cap);
 
+int grph_blob_dump(FILE *out, const uint8_t *data, size_t data_bytes,
+                   grph_blob_text_mode mode, char *err, size_t err_cap);
+
 int grph_blob_disassemble(FILE *out, const uint8_t *data, size_t data_bytes,
                           char *err, size_t err_cap);
+
+int grph_blob_disassemble_canonical(FILE *out, const uint8_t *data,
+                                    size_t data_bytes, char *err,
+                                    size_t err_cap);
 
 #ifdef __cplusplus
 }

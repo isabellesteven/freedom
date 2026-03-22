@@ -1,0 +1,36 @@
+GRPH v1.0 abi=PCNA uuid=00000000-0000-0000-0000-000000000001
+Sections: REQUIRES GRAPH_CONFIG HEAPS BUFFERS NODES SCHEDULE PARAM_DEFAULTS
+
+[REQUIRES]
+count=1
+module 0x00001001 ver=1.0 caps=0x00000000
+
+[GRAPH_CONFIG]
+sample_rate_hz=48000
+block_multiple_N=1
+
+[HEAPS]
+count=3
+heap id=1 kind=IO bytes=768 align=16
+heap id=2 kind=STATE bytes=256 align=16
+heap id=3 kind=PARAM bytes=256 align=16
+
+[BUFFERS]
+count=2
+buf id=1 type=OWNED alias_of=0 fmt=F32 heap=1 off=0 size=192 slots=2 stride=0 base=0 ch=1 frames=48
+buf id=2 type=OWNED alias_of=0 fmt=F32 heap=1 off=384 size=192 slots=2 stride=0 base=0 ch=1 frames=48
+
+[NODES]
+count=1
+node id=10 module=0x00001001 state_heap=2 state_bytes=16 align=16 init_bytes=8 param_block_bytes=4
+
+[SCHEDULE]
+op_count=1
+0: CALL node=10 in=[1] out=[2]
+
+[PARAM_DEFAULTS]
+count=1
+node=10 bytes=4 data=f32(-6.0)
+
+[CRC32]
+status=ok

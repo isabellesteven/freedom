@@ -121,6 +121,8 @@ static const char *module_name(uint32_t module_id) {
   switch (module_id) {
     case 0x00001001u:
       return "Gain";
+    case 0x00001002u:
+      return "Sum2";
     default:
       return "?";
   }
@@ -133,6 +135,19 @@ static void abi_to_str(uint32_t abi, char out[5]) {
     out[i] = (c >= 32u && c <= 126u) ? (char)c : '?';
   }
   out[4] = '\0';
+}
+
+static int is_canonical_mode(grph_blob_text_mode mode) {
+  return mode == GRPH_BLOB_TEXT_CANONICAL;
+}
+
+static void print_hex_bytes(FILE *out, const uint8_t *data, uint32_t bytes) {
+  uint32_t i;
+  fprintf(out, "hex(");
+  for (i = 0; i < bytes; ++i) {
+    fprintf(out, "%02X", data[i]);
+  }
+  fprintf(out, ")");
 }
 
 int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
@@ -164,8 +179,8 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
                 "header_bytes=%u expected 32", out->header_bytes);
   }
   if (out->file_bytes != data_bytes) {
-    return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                "file_bytes=%u actual=%zu", out->file_bytes, data_bytes);
+    return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "file_bytes=%u actual=%zu",
+                out->file_bytes, data_bytes);
   }
 
   out->file_crc32 = rd_u32(data + data_bytes - GRPH_TRAILER_CRC_BYTES);
@@ -211,8 +226,8 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
     if (s.crc32 != 0u) {
       uint32_t got = crc32_eth(s.payload, s.payload_bytes);
       if (got != s.crc32) {
-        return fail(err, err_cap, GRPH_BLOB_ERR_CRC,
-                    "section %s crc mismatch", sect_name(s.type));
+        return fail(err, err_cap, GRPH_BLOB_ERR_CRC, "section %s crc mismatch",
+                    sect_name(s.type));
       }
     }
 
@@ -220,8 +235,7 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
     switch (s.type) {
       case GRPH_SECT_REQUIRES:
         if (out->requires) {
-          return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                      "duplicate REQUIRES");
+          return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "duplicate REQUIRES");
         }
         out->requires = &out->sections[out->section_count - 1];
         break;
@@ -233,8 +247,7 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
         break;
       case GRPH_SECT_BUFFERS:
         if (out->buffers) {
-          return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                      "duplicate BUFFERS");
+          return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "duplicate BUFFERS");
         }
         out->buffers = &out->sections[out->section_count - 1];
         break;
@@ -246,8 +259,7 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
         break;
       case GRPH_SECT_SCHEDULE:
         if (out->schedule) {
-          return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                      "duplicate SCHEDULE");
+          return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "duplicate SCHEDULE");
         }
         out->schedule = &out->sections[out->section_count - 1];
         break;
@@ -278,8 +290,7 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
   }
 
   if (at != data_bytes - GRPH_TRAILER_CRC_BYTES) {
-    return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                "trailing data before crc");
+    return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "trailing data before crc");
   }
   if (!out->requires || !out->heaps || !out->buffers || !out->nodes ||
       !out->schedule || !out->param_defaults || !out->graph_config) {
@@ -292,8 +303,7 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
                 "GRAPH_CONFIG payload_bytes=%" PRIu32 " expected 8",
                 out->graph_config->payload_bytes);
   }
-  out->graph_config_values.sample_rate_hz =
-      rd_u32(out->graph_config->payload + 0);
+  out->graph_config_values.sample_rate_hz = rd_u32(out->graph_config->payload + 0);
   out->graph_config_values.block_multiple_n =
       rd_u32(out->graph_config->payload + 4);
   if (out->graph_config_values.sample_rate_hz == 0u ||
@@ -305,19 +315,26 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
   return GRPH_BLOB_OK;
 }
 
-static int disasm_graph_config(FILE *out, const grph_graph_config *cfg, char *err,
+static int disasm_graph_config(FILE *out, const grph_graph_config *cfg,
+                               grph_blob_text_mode mode, char *err,
                                size_t err_cap) {
   if (!cfg) {
     return fail(err, err_cap, GRPH_BLOB_ERR_ARG, "null graph config");
   }
 
   fprintf(out, "[GRAPH_CONFIG]\n");
-  fprintf(out, "  sample_rate_hz=%" PRIu32 "\n", cfg->sample_rate_hz);
-  fprintf(out, "  block_multiple_N=%" PRIu32 "\n", cfg->block_multiple_n);
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "sample_rate_hz=%" PRIu32 "\n", cfg->sample_rate_hz);
+    fprintf(out, "block_multiple_N=%" PRIu32 "\n", cfg->block_multiple_n);
+  } else {
+    fprintf(out, "  sample_rate_hz=%" PRIu32 "\n", cfg->sample_rate_hz);
+    fprintf(out, "  block_multiple_N=%" PRIu32 "\n", cfg->block_multiple_n);
+  }
   return GRPH_BLOB_OK;
 }
 
-static int disasm_requires(FILE *out, const grph_blob_section *s, char *err,
+static int disasm_requires(FILE *out, const grph_blob_section *s,
+                           grph_blob_text_mode mode, char *err,
                            size_t err_cap) {
   const uint8_t *p = s->payload;
   size_t n = s->payload_bytes;
@@ -331,7 +348,11 @@ static int disasm_requires(FILE *out, const grph_blob_section *s, char *err,
   n -= 4;
 
   fprintf(out, "[REQUIRES]\n");
-  fprintf(out, "  count=%" PRIu32 "\n", count);
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "count=%" PRIu32 "\n", count);
+  } else {
+    fprintf(out, "  count=%" PRIu32 "\n", count);
+  }
   for (i = 0; i < count; ++i) {
     uint32_t module_id;
     uint16_t vmaj;
@@ -345,9 +366,15 @@ static int disasm_requires(FILE *out, const grph_blob_section *s, char *err,
     vmaj = rd_u16(p + 4);
     vmin = rd_u16(p + 6);
     caps = rd_u32(p + 8);
-    fprintf(out, "  module 0x%08" PRIX32 " ver=%u.%u caps=0x%08" PRIX32
-                 "   ; %s\n",
-            module_id, (unsigned)vmaj, (unsigned)vmin, caps, module_name(module_id));
+    if (is_canonical_mode(mode)) {
+      fprintf(out, "module 0x%08" PRIX32 " ver=%u.%u caps=0x%08" PRIX32 "\n",
+              module_id, (unsigned)vmaj, (unsigned)vmin, caps);
+    } else {
+      fprintf(out, "  module 0x%08" PRIX32 " ver=%u.%u caps=0x%08" PRIX32
+                   "   ; %s\n",
+              module_id, (unsigned)vmaj, (unsigned)vmin, caps,
+              module_name(module_id));
+    }
     p += 12;
     n -= 12;
   }
@@ -357,7 +384,8 @@ static int disasm_requires(FILE *out, const grph_blob_section *s, char *err,
   return GRPH_BLOB_OK;
 }
 
-static int disasm_heaps(FILE *out, const grph_blob_section *s, char *err,
+static int disasm_heaps(FILE *out, const grph_blob_section *s,
+                        grph_blob_text_mode mode, char *err,
                         size_t err_cap) {
   const uint8_t *p = s->payload;
   size_t n = s->payload_bytes;
@@ -371,6 +399,9 @@ static int disasm_heaps(FILE *out, const grph_blob_section *s, char *err,
   n -= 4;
 
   fprintf(out, "[HEAPS]\n");
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "count=%" PRIu32 "\n", count);
+  }
   for (i = 0; i < count; ++i) {
     uint32_t heap_id;
     uint32_t kind;
@@ -383,9 +414,15 @@ static int disasm_heaps(FILE *out, const grph_blob_section *s, char *err,
     kind = rd_u32(p + 4);
     bytes = rd_u32(p + 8);
     align = rd_u32(p + 12);
-    fprintf(out, "  heap id=%" PRIu32 " kind=%-5s bytes=%" PRIu32
-                 " align=%" PRIu32 "\n",
-            heap_id, heap_kind_name(kind), bytes, align);
+    if (is_canonical_mode(mode)) {
+      fprintf(out, "heap id=%" PRIu32 " kind=%s bytes=%" PRIu32 " align=%" PRIu32
+                   "\n",
+              heap_id, heap_kind_name(kind), bytes, align);
+    } else {
+      fprintf(out, "  heap id=%" PRIu32 " kind=%-5s bytes=%" PRIu32
+                   " align=%" PRIu32 "\n",
+              heap_id, heap_kind_name(kind), bytes, align);
+    }
     p += 16;
     n -= 16;
   }
@@ -405,7 +442,8 @@ static const char *buf_comment(uint32_t id) {
   return NULL;
 }
 
-static int disasm_buffers(FILE *out, const grph_blob_section *s, char *err,
+static int disasm_buffers(FILE *out, const grph_blob_section *s,
+                          grph_blob_text_mode mode, char *err,
                           size_t err_cap) {
   const uint8_t *p = s->payload;
   size_t n = s->payload_bytes;
@@ -419,6 +457,9 @@ static int disasm_buffers(FILE *out, const grph_blob_section *s, char *err,
   n -= 4;
 
   fprintf(out, "[BUFFERS]\n");
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "count=%" PRIu32 "\n", count);
+  }
   for (i = 0; i < count; ++i) {
     uint32_t buf_id;
     uint8_t buf_type;
@@ -428,7 +469,7 @@ static int disasm_buffers(FILE *out, const grph_blob_section *s, char *err,
     uint32_t size;
     uint16_t slots;
     uint16_t stride;
-    uint32_t base;
+    uint32_t base_buf_id;
     uint16_t ch;
     uint16_t frames;
     const char *comment;
@@ -444,20 +485,34 @@ static int disasm_buffers(FILE *out, const grph_blob_section *s, char *err,
     size = rd_u32(p + 16);
     slots = rd_u16(p + 20);
     stride = rd_u16(p + 22);
-    base = rd_u32(p + 24);
+    base_buf_id = rd_u32(p + 24);
     ch = rd_u16(p + 28);
     frames = rd_u16(p + 30);
-    fprintf(out, "  buf id=%" PRIu32 " type=%-5s fmt=%-3s heap=%" PRIu32
-                 " off=%-3" PRIu32 " size=%" PRIu32 " slots=%u stride=%u base=%" PRIu32
-                 " ch=%u frames=%u",
-            buf_id, buf_type_name(buf_type), fmt_name(fmt), heap_id, off, size,
-            (unsigned)slots, (unsigned)stride, base, (unsigned)ch,
-            (unsigned)frames);
-    comment = buf_comment(buf_id);
-    if (comment) {
-      fprintf(out, "   ; %s", comment);
+
+    if (is_canonical_mode(mode)) {
+      fprintf(out,
+              "buf id=%" PRIu32
+              " type=%s alias_of=%" PRIu32
+              " fmt=%s heap=%" PRIu32
+              " off=%" PRIu32
+              " size=%" PRIu32
+              " slots=%u stride=%u base=0 ch=%u frames=%u\n",
+              buf_id, buf_type_name(buf_type), base_buf_id, fmt_name(fmt),
+              heap_id, off, size, (unsigned)slots, (unsigned)stride,
+              (unsigned)ch, (unsigned)frames);
+    } else {
+      fprintf(out, "  buf id=%" PRIu32 " type=%-5s fmt=%-3s heap=%" PRIu32
+                   " off=%-3" PRIu32 " size=%" PRIu32
+                   " slots=%u stride=%u base=%" PRIu32 " ch=%u frames=%u",
+              buf_id, buf_type_name(buf_type), fmt_name(fmt), heap_id, off,
+              size, (unsigned)slots, (unsigned)stride, base_buf_id,
+              (unsigned)ch, (unsigned)frames);
+      comment = buf_comment(buf_id);
+      if (comment) {
+        fprintf(out, "   ; %s", comment);
+      }
+      fprintf(out, "\n");
     }
-    fprintf(out, "\n");
     p += 32;
     n -= 32;
   }
@@ -468,7 +523,8 @@ static int disasm_buffers(FILE *out, const grph_blob_section *s, char *err,
 }
 
 static int disasm_nodes(FILE *out, const grph_blob_section *nodes,
-                        const grph_blob_section *params, char *err,
+                        const grph_blob_section *params,
+                        grph_blob_text_mode mode, char *err,
                         size_t err_cap) {
   const uint8_t *p = nodes->payload;
   size_t n = nodes->payload_bytes;
@@ -483,6 +539,9 @@ static int disasm_nodes(FILE *out, const grph_blob_section *nodes,
   n -= 4;
 
   fprintf(out, "[NODES]\n");
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "count=%" PRIu32 "\n", count);
+  }
   for (i = 0; i < count; ++i) {
     uint32_t node_id;
     uint32_t module_id;
@@ -510,13 +569,23 @@ static int disasm_nodes(FILE *out, const grph_blob_section *nodes,
       return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "NODES init truncated");
     }
 
-    fprintf(out, "  node id=%" PRIu32 " module=0x%08" PRIX32
-                 " state_heap=%" PRIu32 " state_bytes=%" PRIu32 " align=%" PRIu32
-                 " init_bytes=%" PRIu32 " param_block_bytes=%" PRIu32 "\n",
-            node_id, module_id, state_heap, state_bytes, state_align, init_bytes,
-            param_block_bytes);
+    if (is_canonical_mode(mode)) {
+      fprintf(out, "node id=%" PRIu32 " module=0x%08" PRIX32
+                   " state_heap=%" PRIu32 " state_bytes=%" PRIu32
+                   " align=%" PRIu32 " init_bytes=%" PRIu32
+                   " param_block_bytes=%" PRIu32 "\n",
+              node_id, module_id, state_heap, state_bytes, state_align,
+              init_bytes, param_block_bytes);
+    } else {
+      fprintf(out, "  node id=%" PRIu32 " module=0x%08" PRIX32
+                   " state_heap=%" PRIu32 " state_bytes=%" PRIu32
+                   " align=%" PRIu32 " init_bytes=%" PRIu32
+                   " param_block_bytes=%" PRIu32 "\n",
+              node_id, module_id, state_heap, state_bytes, state_align,
+              init_bytes, param_block_bytes);
+    }
 
-    if (module_id == 0x00001001u && init_bytes >= 8u) {
+    if (!is_canonical_mode(mode) && module_id == 0x00001001u && init_bytes >= 8u) {
       gain_db = rd_f32(p + 4);
       fprintf(out, "    init: gain_db=%.1f\n", gain_db);
       fprintf(out, "    params_default: (param_id=1 f32 %.1f)\n", gain_db);
@@ -534,7 +603,8 @@ static int disasm_nodes(FILE *out, const grph_blob_section *nodes,
   return GRPH_BLOB_OK;
 }
 
-static int disasm_schedule(FILE *out, const grph_blob_section *s, char *err,
+static int disasm_schedule(FILE *out, const grph_blob_section *s,
+                           grph_blob_text_mode mode, char *err,
                            size_t err_cap) {
   const uint8_t *p = s->payload;
   size_t n = s->payload_bytes;
@@ -548,14 +618,17 @@ static int disasm_schedule(FILE *out, const grph_blob_section *s, char *err,
   n -= 4;
 
   fprintf(out, "[SCHEDULE]\n");
-  fprintf(out, "  op_count=%" PRIu32 "\n", count);
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "op_count=%" PRIu32 "\n", count);
+  } else {
+    fprintf(out, "  op_count=%" PRIu32 "\n", count);
+  }
   for (i = 0; i < count; ++i) {
     uint8_t op_type;
     uint8_t n_in;
     uint8_t n_out;
     uint32_t node_id;
-    uint32_t in0;
-    uint32_t out0;
+    uint32_t j;
 
     if (n < 8u) {
       return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
@@ -568,38 +641,47 @@ static int disasm_schedule(FILE *out, const grph_blob_section *s, char *err,
     p += 8;
     n -= 8;
 
-    if (n_in != 1u || n_out != 1u) {
-      return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                  "only 1-in/1-out CALL supported in v1 disasm");
-    }
-    if (n < 8u) {
+    if (n < (((size_t)n_in + (size_t)n_out) * 4u)) {
       return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
                   "SCHEDULE io list truncated");
     }
-    in0 = rd_u32(p + 0);
-    out0 = rd_u32(p + 4);
-    p += 8;
-    n -= 8;
-
     if (op_type != 1u) {
       return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
                   "unsupported op_type=%u", (unsigned)op_type);
     }
-    fprintf(out, "  %" PRIu32 ": CALL node=%" PRIu32 " in=[%" PRIu32
-                 "] out=[%" PRIu32 "]\n",
-            i, node_id, in0, out0);
+    if (is_canonical_mode(mode)) {
+      fprintf(out, "%" PRIu32 ": CALL node=%" PRIu32 " in=[", i, node_id);
+    } else {
+      fprintf(out, "  %" PRIu32 ": CALL node=%" PRIu32 " in=[", i, node_id);
+    }
+    for (j = 0; j < n_in; ++j) {
+      if (j != 0u) {
+        fprintf(out, " ");
+      }
+      fprintf(out, "%" PRIu32, rd_u32(p + ((size_t)j * 4u)));
+    }
+    fprintf(out, "] out=[");
+    for (j = 0; j < n_out; ++j) {
+      if (j != 0u) {
+        fprintf(out, " ");
+      }
+      fprintf(out, "%" PRIu32, rd_u32(p + ((size_t)(n_in + j) * 4u)));
+    }
+    fprintf(out, "]\n");
+    p += ((size_t)n_in + (size_t)n_out) * 4u;
+    n -= ((size_t)n_in + (size_t)n_out) * 4u;
   }
 
   if (n != 0u) {
-    return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
-                "SCHEDULE trailing bytes");
+    return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "SCHEDULE trailing bytes");
   }
 
   return GRPH_BLOB_OK;
 }
 
 static int disasm_param_defaults(FILE *out, const grph_blob_section *s,
-                                 char *err, size_t err_cap) {
+                                 grph_blob_text_mode mode, char *err,
+                                 size_t err_cap) {
   const uint8_t *p = s->payload;
   size_t n = s->payload_bytes;
   uint32_t count;
@@ -613,6 +695,9 @@ static int disasm_param_defaults(FILE *out, const grph_blob_section *s,
   n -= 4;
 
   fprintf(out, "[PARAM_DEFAULTS]\n");
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "count=%" PRIu32 "\n", count);
+  }
   for (i = 0; i < count; ++i) {
     uint32_t node_id;
     uint32_t bytes;
@@ -631,12 +716,23 @@ static int disasm_param_defaults(FILE *out, const grph_blob_section *s,
     }
     if (bytes == 4u) {
       gain_db = rd_f32(p);
-      fprintf(out, "  node=%" PRIu32 " bytes=%" PRIu32
-                   "  data=f32(%.1f)\n",
-              node_id, bytes, gain_db);
+      if (is_canonical_mode(mode)) {
+        fprintf(out, "node=%" PRIu32 " bytes=%" PRIu32 " data=f32(%.1f)\n",
+                node_id, bytes, gain_db);
+      } else {
+        fprintf(out, "  node=%" PRIu32 " bytes=%" PRIu32 "  data=f32(%.1f)\n",
+                node_id, bytes, gain_db);
+      }
     } else {
-      fprintf(out, "  node=%" PRIu32 " bytes=%" PRIu32 "  data=bytes\n",
-              node_id, bytes);
+      if (is_canonical_mode(mode)) {
+        fprintf(out, "node=%" PRIu32 " bytes=%" PRIu32 " data=", node_id,
+                bytes);
+      } else {
+        fprintf(out, "  node=%" PRIu32 " bytes=%" PRIu32 "  data=", node_id,
+                bytes);
+      }
+      print_hex_bytes(out, p, bytes);
+      fprintf(out, "\n");
     }
     p += bytes;
     n -= bytes;
@@ -649,8 +745,8 @@ static int disasm_param_defaults(FILE *out, const grph_blob_section *s,
   return GRPH_BLOB_OK;
 }
 
-int grph_blob_disassemble(FILE *out, const uint8_t *data, size_t data_bytes,
-                          char *err, size_t err_cap) {
+int grph_blob_dump(FILE *out, const uint8_t *data, size_t data_bytes,
+                   grph_blob_text_mode mode, char *err, size_t err_cap) {
   grph_blob_view blob;
   char abi[5];
   int rc;
@@ -664,68 +760,97 @@ int grph_blob_disassemble(FILE *out, const uint8_t *data, size_t data_bytes,
   }
 
   abi_to_str(blob.target_abi, abi);
-  fprintf(out,
-          "GRPH v%u.%u  abi=%s  uuid=%08" PRIx32 "-%04" PRIx32 "-%04" PRIx32
-          "-%04" PRIx32 "-%012" PRIx64 "\n",
-          (unsigned)blob.version_major, (unsigned)blob.version_minor, abi,
-          (uint32_t)(blob.graph_uuid_hi >> 32),
-          (uint32_t)((blob.graph_uuid_hi >> 16) & 0xFFFFu),
-          (uint32_t)(blob.graph_uuid_hi & 0xFFFFu),
-          (uint32_t)((blob.graph_uuid_lo >> 48) & 0xFFFFu),
-          (uint64_t)(blob.graph_uuid_lo & 0xFFFFFFFFFFFFULL));
+  if (is_canonical_mode(mode)) {
+    fprintf(out,
+            "GRPH v%u.%u abi=%s uuid=%08" PRIx32 "-%04" PRIx32 "-%04" PRIx32
+            "-%04" PRIx32 "-%012" PRIx64 "\n",
+            (unsigned)blob.version_major, (unsigned)blob.version_minor, abi,
+            (uint32_t)(blob.graph_uuid_hi >> 32),
+            (uint32_t)((blob.graph_uuid_hi >> 16) & 0xFFFFu),
+            (uint32_t)(blob.graph_uuid_hi & 0xFFFFu),
+            (uint32_t)((blob.graph_uuid_lo >> 48) & 0xFFFFu),
+            (uint64_t)(blob.graph_uuid_lo & 0xFFFFFFFFFFFFULL));
+  } else {
+    fprintf(out,
+            "GRPH v%u.%u  abi=%s  uuid=%08" PRIx32 "-%04" PRIx32 "-%04" PRIx32
+            "-%04" PRIx32 "-%012" PRIx64 "\n",
+            (unsigned)blob.version_major, (unsigned)blob.version_minor, abi,
+            (uint32_t)(blob.graph_uuid_hi >> 32),
+            (uint32_t)((blob.graph_uuid_hi >> 16) & 0xFFFFu),
+            (uint32_t)(blob.graph_uuid_hi & 0xFFFFu),
+            (uint32_t)((blob.graph_uuid_lo >> 48) & 0xFFFFu),
+            (uint64_t)(blob.graph_uuid_lo & 0xFFFFFFFFFFFFULL));
+  }
 
   fprintf(out,
           "Sections: REQUIRES GRAPH_CONFIG HEAPS BUFFERS NODES SCHEDULE "
           "PARAM_DEFAULTS");
-  if (blob.metadata_min) {
+  if (blob.metadata_min && !is_canonical_mode(mode)) {
     fprintf(out, " METADATA_MIN");
   }
   fprintf(out, "\n\n");
 
-  rc = disasm_requires(out, blob.requires, err, err_cap);
+  rc = disasm_requires(out, blob.requires, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
-  rc = disasm_graph_config(out, &blob.graph_config_values, err, err_cap);
+  rc = disasm_graph_config(out, &blob.graph_config_values, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
-  rc = disasm_heaps(out, blob.heaps, err, err_cap);
+  rc = disasm_heaps(out, blob.heaps, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
-  rc = disasm_buffers(out, blob.buffers, err, err_cap);
+  rc = disasm_buffers(out, blob.buffers, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
-  rc = disasm_nodes(out, blob.nodes, blob.param_defaults, err, err_cap);
+  rc = disasm_nodes(out, blob.nodes, blob.param_defaults, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
-  rc = disasm_schedule(out, blob.schedule, err, err_cap);
+  rc = disasm_schedule(out, blob.schedule, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
-  rc = disasm_param_defaults(out, blob.param_defaults, err, err_cap);
+  rc = disasm_param_defaults(out, blob.param_defaults, mode, err, err_cap);
   if (rc != GRPH_BLOB_OK) {
     return rc;
   }
   fprintf(out, "\n");
 
   fprintf(out, "[CRC32]\n");
-  fprintf(out, "  ok\n");
+  if (is_canonical_mode(mode)) {
+    fprintf(out, "status=ok\n");
+  } else {
+    fprintf(out, "  ok\n");
+  }
 
   return GRPH_BLOB_OK;
+}
+
+int grph_blob_disassemble(FILE *out, const uint8_t *data, size_t data_bytes,
+                          char *err, size_t err_cap) {
+  return grph_blob_dump(out, data, data_bytes, GRPH_BLOB_TEXT_HUMAN, err,
+                        err_cap);
+}
+
+int grph_blob_disassemble_canonical(FILE *out, const uint8_t *data,
+                                    size_t data_bytes, char *err,
+                                    size_t err_cap) {
+  return grph_blob_dump(out, data, data_bytes, GRPH_BLOB_TEXT_CANONICAL, err,
+                        err_cap);
 }

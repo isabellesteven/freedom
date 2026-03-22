@@ -1,5 +1,3 @@
-Below is a **clean, consolidated `blob_v1.md`** incorporating all current decisions:
-
 * Sectioned blob container
 * Runtime-allocated node state (Option B)
 * **GRAPH_CONFIG section**

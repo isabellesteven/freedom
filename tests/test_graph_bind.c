@@ -1,13 +1,10 @@
-/* Verifies that disassembling a reference blob matches the expected stable text format.
-   It protects the human-readable blob output used by CLI and regression checks. */
-#include "runtime/loader/blob.h"
+/* Verifies graph_bind_from_blob() and graph_unbind() using caller-provided static memory.
+   It checks that heaps, buffers, nodes, and schedule entries are bound into the expected regions. */
+#include "runtime/engine/graph_instance.h"
 
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define BUF_CAP 512u
 
 static void wr_u16(uint8_t *p, uint16_t v) {
   p[0] = (uint8_t)(v & 0xFFu);
@@ -27,7 +24,7 @@ static void wr_u64(uint8_t *p, uint64_t v) {
 }
 
 static void wr_f32(uint8_t *p, float v) {
-  uint32_t u = 0;
+  uint32_t u;
   memcpy(&u, &v, sizeof(u));
   wr_u32(p, u);
 }
@@ -61,13 +58,13 @@ static size_t build_reference_blob(uint8_t *buf, size_t cap) {
   uint8_t graph_config[8];
   uint8_t heaps[52];
   uint8_t buffers[68];
-  uint8_t nodes[44];
+  uint8_t nodes[40];
   uint8_t schedule[20];
   uint8_t params[16];
   size_t at;
   uint32_t crc;
 
-  if (cap < BUF_CAP) {
+  if (cap < 512u) {
     return 0u;
   }
 
@@ -137,10 +134,9 @@ static size_t build_reference_blob(uint8_t *buf, size_t cap) {
   wr_u32(nodes + 16, 0u);
   wr_u32(nodes + 20, 16u);
   wr_u32(nodes + 24, 16u);
-  wr_u32(nodes + 28, 8u);
+  wr_u32(nodes + 28, 4u);
   wr_u32(nodes + 32, 4u);
-  wr_u32(nodes + 36, 1u);
-  wr_f32(nodes + 40, -6.0f);
+  wr_f32(nodes + 36, -6.0f);
 
   wr_u32(schedule + 0, 1u);
   schedule[4] = 1u;
@@ -172,205 +168,120 @@ static size_t build_reference_blob(uint8_t *buf, size_t cap) {
   return at + 4u;
 }
 
-static char *read_text_file(const char *path) {
-  FILE *f = fopen(path, "rb");
-  long n;
-  size_t rn;
-  char *buf;
-  if (!f) {
-    return NULL;
-  }
-  if (fseek(f, 0, SEEK_END) != 0) {
-    fclose(f);
-    return NULL;
-  }
-  n = ftell(f);
-  if (n < 0) {
-    fclose(f);
-    return NULL;
-  }
-  if (fseek(f, 0, SEEK_SET) != 0) {
-    fclose(f);
-    return NULL;
-  }
-  buf = (char *)malloc((size_t)n + 1u);
-  if (!buf) {
-    fclose(f);
-    return NULL;
-  }
-  rn = fread(buf, 1u, (size_t)n, f);
-  fclose(f);
-  if (rn != (size_t)n) {
-    free(buf);
-    return NULL;
-  }
-  buf[n] = '\0';
-  return buf;
-}
-
-static char *disasm_to_string(const uint8_t *blob, size_t blob_bytes) {
-  char err[256] = {0};
-  FILE *tmp = tmpfile();
-  char *buf;
-  long n;
-  size_t rn;
-
-  if (!tmp) {
-    return NULL;
-  }
-
-  if (grph_blob_disassemble(tmp, blob, blob_bytes, err, sizeof(err)) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-
-  if (fflush(tmp) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-  if (fseek(tmp, 0, SEEK_END) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-  n = ftell(tmp);
-  if (n < 0) {
-    fclose(tmp);
-    return NULL;
-  }
-  if (fseek(tmp, 0, SEEK_SET) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-
-  buf = (char *)malloc((size_t)n + 1u);
-  if (!buf) {
-    fclose(tmp);
-    return NULL;
-  }
-  rn = fread(buf, 1u, (size_t)n, tmp);
-  fclose(tmp);
-  if (rn != (size_t)n) {
-    free(buf);
-    return NULL;
-  }
-  buf[n] = '\0';
-  return buf;
-}
-
-static char *canonical_to_string(const uint8_t *blob, size_t blob_bytes) {
-  char err[256] = {0};
-  FILE *tmp = tmpfile();
-  char *buf;
-  long n;
-  size_t rn;
-
-  if (!tmp) {
-    return NULL;
-  }
-
-  if (grph_blob_disassemble_canonical(tmp, blob, blob_bytes, err, sizeof(err)) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-
-  if (fflush(tmp) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-  if (fseek(tmp, 0, SEEK_END) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-  n = ftell(tmp);
-  if (n < 0) {
-    fclose(tmp);
-    return NULL;
-  }
-  if (fseek(tmp, 0, SEEK_SET) != 0) {
-    fclose(tmp);
-    return NULL;
-  }
-
-  buf = (char *)malloc((size_t)n + 1u);
-  if (!buf) {
-    fclose(tmp);
-    return NULL;
-  }
-  rn = fread(buf, 1u, (size_t)n, tmp);
-  fclose(tmp);
-  if (rn != (size_t)n) {
-    free(buf);
-    return NULL;
-  }
-  buf[n] = '\0';
-  return buf;
-}
+extern const AweModuleDescriptor *awe_get_module_descriptor(uint32_t abi_major,
+                                                            uint32_t abi_minor);
 
 int main(void) {
-  uint8_t blob[BUF_CAP];
-  size_t blob_bytes;
-  char *actual;
-  char *canonical;
-  char *expected;
-  char *expected_canonical;
+  uint8_t blob_bytes[512];
+  BlobView blob;
+  char err[256];
+  const AweModuleDescriptor *gain_desc;
+  const AweModuleDescriptor *modules[1];
+  ModuleRegistry registry;
+  GraphInstance graph;
+  RuntimeHostConfig host_cfg;
+  RuntimeMemoryConfig mem_cfg;
+  uint8_t metadata_mem[512];
+  uint8_t module_state_mem[64];
+  uint8_t heap0[768];
+  uint8_t heap1[256];
+  uint8_t heap2[256];
+  void *heap_bases[3];
+  uint32_t heap_sizes[3];
+  size_t blob_size;
+  GraphStatus status;
 
-  blob_bytes = build_reference_blob(blob, sizeof(blob));
-  if (blob_bytes == 0u) {
-    fprintf(stderr, "failed to build reference blob\n");
+  blob_size = build_reference_blob(blob_bytes, sizeof(blob_bytes));
+  if (blob_size == 0u) {
+    fprintf(stderr, "failed to build test blob\n");
+    return 1;
+  }
+  if (grph_blob_parse(blob_bytes, blob_size, &blob, err, sizeof(err)) != GRPH_BLOB_OK) {
+    fprintf(stderr, "blob parse failed: %s\n", err);
     return 1;
   }
 
-  actual = disasm_to_string(blob, blob_bytes);
-  if (!actual) {
-    fprintf(stderr, "failed to disassemble reference blob\n");
+  gain_desc = awe_get_module_descriptor(AWE_ABI_MAJOR, AWE_ABI_MINOR);
+  if (!gain_desc) {
+    fprintf(stderr, "gain descriptor unavailable\n");
     return 1;
   }
 
-  expected = read_text_file("tests/golden/reference_blob.disasm.txt");
-  if (!expected) {
-    fprintf(stderr, "failed to read golden file\n");
-    free(actual);
-    return 1;
-  }
-  expected_canonical = read_text_file("tests/golden/reference_blob.canonical_ir.txt");
-  if (!expected_canonical) {
-    fprintf(stderr, "failed to read canonical golden file\n");
-    free(actual);
-    free(expected);
+  modules[0] = gain_desc;
+  registry.modules = modules;
+  registry.module_count = 1u;
+
+  memset(&graph, 0xA5, sizeof(graph));
+  memset(metadata_mem, 0xCC, sizeof(metadata_mem));
+  memset(module_state_mem, 0xDD, sizeof(module_state_mem));
+  memset(heap0, 0, sizeof(heap0));
+  memset(heap1, 0, sizeof(heap1));
+  memset(heap2, 0, sizeof(heap2));
+
+  host_cfg.base_block_frames = 48u;
+  heap_bases[0] = heap0;
+  heap_bases[1] = heap1;
+  heap_bases[2] = heap2;
+  heap_sizes[0] = sizeof(heap0);
+  heap_sizes[1] = sizeof(heap1);
+  heap_sizes[2] = sizeof(heap2);
+
+  mem_cfg.metadata_mem = metadata_mem;
+  mem_cfg.metadata_mem_size = sizeof(metadata_mem);
+  mem_cfg.module_state_mem = module_state_mem;
+  mem_cfg.module_state_mem_size = sizeof(module_state_mem);
+  mem_cfg.heap_bases = heap_bases;
+  mem_cfg.heap_sizes = heap_sizes;
+  mem_cfg.num_heaps = 3u;
+
+  status = graph_bind_from_blob(&blob, &registry, &host_cfg, &mem_cfg, &graph);
+  if (status != GRAPH_STATUS_OK) {
+    fprintf(stderr, "graph_bind_from_blob failed: %d\n", (int)status);
     return 1;
   }
 
-  if (strcmp(actual, expected) != 0) {
-    fprintf(stderr, "golden mismatch\n--- expected ---\n%s\n--- actual ---\n%s\n",
-            expected, actual);
-    free(actual);
-    free(expected);
-    free(expected_canonical);
+  if (graph.sample_rate_hz != 48000u || graph.block_frames != 48u ||
+      graph.num_heaps != 3u || graph.num_buffers != 2u || graph.num_nodes != 1u ||
+      graph.schedule_length != 1u) {
+    fprintf(stderr, "unexpected bound graph counts\n");
+    return 1;
+  }
+  if (graph.buffers[0].data != heap0 || graph.buffers[1].data != (heap0 + 384u)) {
+    fprintf(stderr, "buffer data pointers not bound into supplied heaps\n");
+    return 1;
+  }
+  if ((uint8_t *)graph.nodes[0].state < module_state_mem ||
+      (uint8_t *)graph.nodes[0].state >= module_state_mem + sizeof(module_state_mem)) {
+    fprintf(stderr, "node state pointer not bound into supplied state memory\n");
+    return 1;
+  }
+  if (!graph.nodes[0].inputs || !graph.nodes[0].outputs ||
+      graph.nodes[0].inputs[0].buffer != &graph.buffers[0] ||
+      graph.nodes[0].outputs[0].buffer != &graph.buffers[1] ||
+      graph.nodes[0].input_ptrs[0] != graph.buffers[0].data ||
+      graph.nodes[0].output_ptrs[0] != graph.buffers[1].data) {
+    fprintf(stderr, "node buffer bindings not established\n");
+    return 1;
+  }
+  if (graph.schedule[0].node != &graph.nodes[0] || graph.schedule[0].node_index != 0u) {
+    fprintf(stderr, "schedule entry not bound to node\n");
+    return 1;
+  }
+  if (!graph.is_bound || graph.block_multiple_n != 1u) {
+    fprintf(stderr, "graph bookkeeping not marked bound\n");
     return 1;
   }
 
-  canonical = canonical_to_string(blob, blob_bytes);
-  if (!canonical) {
-    fprintf(stderr, "failed to disassemble canonical reference blob\n");
-    free(actual);
-    free(expected);
-    free(expected_canonical);
+  status = graph_unbind(&graph);
+  if (status != GRAPH_STATUS_OK) {
+    fprintf(stderr, "graph_unbind failed: %d\n", (int)status);
+    return 1;
+  }
+  if (graph.heaps != NULL || graph.buffers != NULL || graph.nodes != NULL ||
+      graph.schedule != NULL || graph.num_nodes != 0u || graph.block_frames != 0u) {
+    fprintf(stderr, "graph bookkeeping not cleared after unbind\n");
     return 1;
   }
 
-  if (strcmp(canonical, expected_canonical) != 0) {
-    fprintf(stderr, "canonical golden mismatch\n--- expected ---\n%s\n--- actual ---\n%s\n",
-            expected_canonical, canonical);
-    free(actual);
-    free(expected);
-    free(canonical);
-    free(expected_canonical);
-    return 1;
-  }
-
-  free(actual);
-  free(expected);
-  free(canonical);
-  free(expected_canonical);
   return 0;
 }
