@@ -18,7 +18,9 @@ You need:
 
 Optional:
 
-- A C compiler and `make` if you need to rebuild the `disasm` tool
+- A C compiler and a make tool if you need to rebuild the `disasm` tool
+
+On Windows, prefer `mingw32-make` if it is available. In some environments `make` may resolve to the MSYS build at `C:\msys64\usr\bin\make.exe`, which can fail even though `C:\msys64\ucrt64\bin\mingw32-make.exe` works.
 
 ## Repository Layout
 
@@ -183,6 +185,18 @@ The exact formatting may include more fields, but these are the key items to che
 If `bin/disasm.exe` is missing or stale, rebuild it from the repo root:
 
 ```powershell
+mingw32-make disasm
+```
+
+If `mingw32-make` is not on your `PATH`, use the full path:
+
+```powershell
+C:\msys64\ucrt64\bin\mingw32-make.exe disasm
+```
+
+If plain `make` works in your shell, that is also fine:
+
+```powershell
 make disasm
 ```
 
@@ -239,7 +253,13 @@ Symptom:
 Action:
 
 ```powershell
-make disasm
+mingw32-make disasm
+```
+
+If that command is not available on your `PATH`, try:
+
+```powershell
+C:\msys64\ucrt64\bin\mingw32-make.exe disasm
 ```
 
 ### Blob Looks Wrong

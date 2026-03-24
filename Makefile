@@ -3,13 +3,15 @@ CC := C:/msys64/ucrt64/bin/gcc.exe
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -I. -Imodules
 BIN_DIR := bin
 
-DISASM_BIN := $(BIN_DIR)/disasm
-TEST_BIN := $(BIN_DIR)/test_disasm_golden
-GRAPH_REQ_TEST_BIN := $(BIN_DIR)/test_graph_memory_requirements
-BLOB_CURSOR_TEST_BIN := $(BIN_DIR)/test_blob_cursor
-GRAPH_BIND_TEST_BIN := $(BIN_DIR)/test_graph_bind
-GRAPH_PROCESS_TEST_BIN := $(BIN_DIR)/test_graph_process
-RUNTIME_FROM_BLOB_TEST_BIN := $(BIN_DIR)/test_runtime_from_blob
+EXE_EXT := .exe
+
+DISASM_BIN := $(BIN_DIR)/disasm$(EXE_EXT)
+TEST_BIN := $(BIN_DIR)/test_disasm_golden$(EXE_EXT)
+GRAPH_REQ_TEST_BIN := $(BIN_DIR)/test_graph_memory_requirements$(EXE_EXT)
+BLOB_CURSOR_TEST_BIN := $(BIN_DIR)/test_blob_cursor$(EXE_EXT)
+GRAPH_BIND_TEST_BIN := $(BIN_DIR)/test_graph_bind$(EXE_EXT)
+GRAPH_PROCESS_TEST_BIN := $(BIN_DIR)/test_graph_process$(EXE_EXT)
+RUNTIME_FROM_BLOB_TEST_BIN := $(BIN_DIR)/test_runtime_from_blob$(EXE_EXT)
 
 .PHONY: all disasm test test-unit test-cli-golden clean
 
