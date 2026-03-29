@@ -13,3 +13,11 @@ tools/compiler/__pycache__/compiler.cpython-312.pyc
 tools/compiler/__pycache__/dsl_parser.cpython-312.pyc
 temp_validate/test_disasm_golden.exe
 temp_validate/test_graph_memory_requirements.exe
+bin/test_blob_cursor.exe
+bin/test_disasm_golden.exe
+bin/disasm.exe
+bin/test_graph_bind.exe
+bin/test_graph_memory_requirements.exe
+bin/test_graph_process.exe
+bin/test_module_registry.exe
+bin/test_runtime_from_blob.exe

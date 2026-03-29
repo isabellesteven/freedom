@@ -1,6 +1,7 @@
 /* Verifies graph_bind_from_blob() and graph_unbind() using caller-provided static memory.
    It checks that heaps, buffers, nodes, and schedule entries are bound into the expected regions. */
 #include "runtime/engine/graph_instance.h"
+#include "runtime/engine/module_registry.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -168,16 +169,11 @@ static size_t build_reference_blob(uint8_t *buf, size_t cap) {
   return at + 4u;
 }
 
-extern const AweModuleDescriptor *awe_get_module_descriptor(uint32_t abi_major,
-                                                            uint32_t abi_minor);
-
 int main(void) {
   uint8_t blob_bytes[512];
   BlobView blob;
   char err[256];
-  const AweModuleDescriptor *gain_desc;
-  const AweModuleDescriptor *modules[1];
-  ModuleRegistry registry;
+  const ModuleRegistry *registry;
   GraphInstance graph;
   RuntimeHostConfig host_cfg;
   RuntimeMemoryConfig mem_cfg;
@@ -201,15 +197,11 @@ int main(void) {
     return 1;
   }
 
-  gain_desc = awe_get_module_descriptor(AWE_ABI_MAJOR, AWE_ABI_MINOR);
-  if (!gain_desc) {
-    fprintf(stderr, "gain descriptor unavailable\n");
+  registry = grph_builtin_module_registry();
+  if (!registry || !grph_module_registry_validate(registry)) {
+    fprintf(stderr, "built-in registry unavailable\n");
     return 1;
   }
-
-  modules[0] = gain_desc;
-  registry.modules = modules;
-  registry.module_count = 1u;
 
   memset(&graph, 0xA5, sizeof(graph));
   memset(metadata_mem, 0xCC, sizeof(metadata_mem));
@@ -234,7 +226,7 @@ int main(void) {
   mem_cfg.heap_sizes = heap_sizes;
   mem_cfg.num_heaps = 3u;
 
-  status = graph_bind_from_blob(&blob, &registry, &host_cfg, &mem_cfg, &graph);
+  status = graph_bind_from_blob(&blob, registry, &host_cfg, &mem_cfg, &graph);
   if (status != GRAPH_STATUS_OK) {
     fprintf(stderr, "graph_bind_from_blob failed: %d\n", (int)status);
     return 1;

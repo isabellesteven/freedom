@@ -1,3 +1,10 @@
+"""Syntax-only DSL parser.
+
+This module parses graph structure and literal values only. Semantic checks such
+as supported modules, pin validity, and connection compatibility are deferred to
+the compiler lowering stage.
+"""
+
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union

@@ -1,5 +1,7 @@
 /* Verifies graph_process() over bound graphs, including success and failure paths.
    It checks one-node gain, two-node chaining, and early stop when a module process callback fails. */
+#include "modules/gain/gain.h"
+#include "runtime/engine/module_registry.h"
 #include "runtime/engine/graph_instance.h"
 
 #include <math.h>
@@ -489,12 +491,8 @@ static size_t build_fail_blob(uint8_t *buf, size_t cap) {
   return at + 4u;
 }
 
-extern const AweModuleDescriptor *awe_get_module_descriptor(uint32_t abi_major,
-                                                            uint32_t abi_minor);
-
 static GraphStatus bind_blob(const uint8_t *blob_bytes, size_t blob_size,
-                             const AweModuleDescriptor *const *modules,
-                             uint32_t module_count, GraphInstance *out_graph,
+                             const ModuleRegistry *registry, GraphInstance *out_graph,
                              uint8_t *metadata_mem, uint32_t metadata_size,
                              uint8_t *state_mem, uint32_t state_size,
                              uint8_t *heap0, uint32_t heap0_size,
@@ -502,7 +500,6 @@ static GraphStatus bind_blob(const uint8_t *blob_bytes, size_t blob_size,
                              uint8_t *heap2, uint32_t heap2_size) {
   BlobView blob;
   char err[256];
-  ModuleRegistry registry;
   RuntimeHostConfig host_cfg;
   RuntimeMemoryConfig mem_cfg;
   void *heap_bases[3];
@@ -513,8 +510,9 @@ static GraphStatus bind_blob(const uint8_t *blob_bytes, size_t blob_size,
     return GRAPH_STATUS_INVALID_BLOB;
   }
 
-  registry.modules = modules;
-  registry.module_count = module_count;
+  if (!registry || !grph_module_registry_validate(registry)) {
+    return GRAPH_STATUS_BAD_ARG;
+  }
   host_cfg.base_block_frames = 48u;
   heap_bases[0] = heap0;
   heap_bases[1] = heap1;
@@ -531,13 +529,19 @@ static GraphStatus bind_blob(const uint8_t *blob_bytes, size_t blob_size,
   mem_cfg.heap_sizes = heap_sizes;
   mem_cfg.num_heaps = 3u;
 
-  return graph_bind_from_blob(&blob, &registry, &host_cfg, &mem_cfg, out_graph);
+  return graph_bind_from_blob(&blob, registry, &host_cfg, &mem_cfg, out_graph);
 }
 
 int main(void) {
-  const AweModuleDescriptor *gain_desc;
-  const AweModuleDescriptor *gain_modules[1];
-  const AweModuleDescriptor *mixed_modules[2];
+  const ModuleRegistry *builtin_registry;
+  static const AweModuleDescriptor *const mixed_modules[] = {
+      &g_gain_desc,
+      &g_fail_desc,
+  };
+  static const ModuleRegistry mixed_registry = {
+      mixed_modules,
+      2u,
+  };
   uint8_t blob_bytes[768];
   uint8_t metadata_mem[1024];
   uint8_t state_mem[128];
@@ -549,14 +553,15 @@ int main(void) {
   size_t blob_size;
   uint32_t i;
 
-  gain_desc = awe_get_module_descriptor(AWE_ABI_MAJOR, AWE_ABI_MINOR);
-  if (!gain_desc) {
-    fprintf(stderr, "gain descriptor unavailable\n");
+  builtin_registry = grph_builtin_module_registry();
+  if (!builtin_registry || !grph_module_registry_validate(builtin_registry)) {
+    fprintf(stderr, "built-in registry unavailable\n");
     return 1;
   }
-  gain_modules[0] = gain_desc;
-  mixed_modules[0] = gain_desc;
-  mixed_modules[1] = &g_fail_desc;
+  if (!grph_module_registry_validate(&mixed_registry)) {
+    fprintf(stderr, "mixed registry failed validation\n");
+    return 1;
+  }
 
   blob_size = build_gain_blob(blob_bytes, sizeof(blob_bytes), -6.0f);
   memset(&graph, 0, sizeof(graph));
@@ -565,7 +570,7 @@ int main(void) {
   memset(heap0, 0, sizeof(heap0));
   memset(heap1, 0, sizeof(heap1));
   memset(heap2, 0, sizeof(heap2));
-  status = bind_blob(blob_bytes, blob_size, gain_modules, 1u, &graph, metadata_mem,
+  status = bind_blob(blob_bytes, blob_size, builtin_registry, &graph, metadata_mem,
                      sizeof(metadata_mem), state_mem, sizeof(state_mem), heap0,
                      sizeof(heap0), heap1, sizeof(heap1), heap2, sizeof(heap2));
   if (status != GRAPH_STATUS_OK) {
@@ -597,7 +602,7 @@ int main(void) {
   memset(heap0, 0, sizeof(heap0));
   memset(heap1, 0, sizeof(heap1));
   memset(heap2, 0, sizeof(heap2));
-  status = bind_blob(blob_bytes, blob_size, gain_modules, 1u, &graph, metadata_mem,
+  status = bind_blob(blob_bytes, blob_size, builtin_registry, &graph, metadata_mem,
                      sizeof(metadata_mem), state_mem, sizeof(state_mem), heap0,
                      sizeof(heap0), heap1, sizeof(heap1), heap2, sizeof(heap2));
   if (status != GRAPH_STATUS_OK) {
@@ -630,7 +635,7 @@ int main(void) {
   memset(heap0, 0, sizeof(heap0));
   memset(heap1, 0, sizeof(heap1));
   memset(heap2, 0, sizeof(heap2));
-  status = bind_blob(blob_bytes, blob_size, mixed_modules, 2u, &graph, metadata_mem,
+  status = bind_blob(blob_bytes, blob_size, &mixed_registry, &graph, metadata_mem,
                      sizeof(metadata_mem), state_mem, sizeof(state_mem), heap0,
                      sizeof(heap0), heap1, sizeof(heap1), heap2, sizeof(heap2));
   if (status != GRAPH_STATUS_OK) {

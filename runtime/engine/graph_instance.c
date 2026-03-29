@@ -1,5 +1,14 @@
 #include "runtime/engine/graph_instance.h"
 
+/*
+ * Runtime graph binding and execution.
+ *
+ * This file translates a validated blob into bound runtime structures living in
+ * caller-owned memory, then executes the fixed blob schedule one graph block at
+ * a time. Loader parsing stays localized to section helpers so the bind/process
+ * path remains explicit and reviewable.
+ */
+
 #include <stddef.h>
 #include <string.h>
 
@@ -70,6 +79,8 @@ static uint32_t metadata_align(void) {
   return (uint32_t)sizeof(void *);
 }
 
+/* Read-only helpers below decode v1 blob records into small local structs. Keep
+   the wire-format assumptions here so the bind path does not parse raw bytes. */
 static int load_graph_config(const BlobView *blob, uint32_t *out_sample_rate_hz,
                              uint32_t *out_block_multiple_n) {
   if (!blob || !out_sample_rate_hz || !out_block_multiple_n || !blob->graph_config) {
@@ -333,17 +344,7 @@ static int find_param_defaults_for_node(const BlobView *blob, uint32_t node_id,
 
 static const AweModuleDescriptor *lookup_module(const ModuleRegistry *registry,
                                                 uint32_t module_id) {
-  uint32_t i;
-  if (!registry || !registry->modules) {
-    return NULL;
-  }
-  for (i = 0; i < registry->module_count; ++i) {
-    const AweModuleDescriptor *desc = registry->modules[i];
-    if (desc && desc->module_id == module_id) {
-      return desc;
-    }
-  }
-  return NULL;
+  return grph_module_registry_find(registry, module_id);
 }
 
 static int find_runtime_buffer(RuntimeBufferView *buffers, uint32_t buffer_count,
@@ -530,6 +531,8 @@ static GraphStatus compute_binding_bytes(const BlobView *blob,
   return GRAPH_STATUS_OK;
 }
 
+/* Binding failures do not free host memory, so cleanup means deinitializing any
+   module state that was successfully initialized before the failure occurred. */
 static void unbind_initialized_nodes(GraphInstance *graph) {
   uint32_t i;
   if (!graph || !graph->nodes) {
@@ -569,6 +572,8 @@ static GraphStatus bind_heaps(const BlobView *blob, const RuntimeMemoryConfig *m
   return GRAPH_STATUS_OK;
 }
 
+/* Buffers are bound as views into caller-owned heaps. Alias/view relationships
+   are preserved by pointer/offset reuse rather than copied storage. */
 static GraphStatus bind_buffers(const BlobView *blob, GraphInstance *graph) {
   uint32_t i;
   if (!blob || !graph || !graph->buffers || !graph->heaps) {
@@ -603,6 +608,8 @@ static GraphStatus bind_buffers(const BlobView *blob, GraphInstance *graph) {
   return GRAPH_STATUS_OK;
 }
 
+/* Node binding resolves module descriptors and allocates per-node state from the
+   caller-provided state arena. State is zeroed deterministically before init(). */
 static GraphStatus bind_nodes(const BlobView *blob, const ModuleRegistry *registry,
                               MemArena *state_arena, GraphInstance *graph) {
   uint32_t i;
@@ -642,6 +649,8 @@ static GraphStatus bind_nodes(const BlobView *blob, const ModuleRegistry *regist
   return GRAPH_STATUS_OK;
 }
 
+/* Schedule binding is intentionally simple: trust the compiler-provided order,
+   resolve node/buffer references, and precompute raw pointer arrays once. */
 static GraphStatus bind_schedule(const BlobView *blob, MemArena *metadata_arena,
                                  GraphInstance *graph) {
   uint32_t i;
@@ -747,6 +756,8 @@ static GraphStatus apply_param_defaults(RuntimeNodeInstance *node) {
   return GRAPH_STATUS_OK;
 }
 
+/* Modules are initialized only after heaps, buffers, nodes, and schedule links
+   are in place so init() sees the same block context used at process time. */
 static GraphStatus init_nodes(GraphInstance *graph) {
   AweRuntimeApi api;
   AweProcessCtx init_ctx;
@@ -785,6 +796,8 @@ static GraphStatus init_nodes(GraphInstance *graph) {
   return GRAPH_STATUS_OK;
 }
 
+/* Execution is schedule-driven: process one already-bound node against the
+   precomputed raw pointer arrays prepared during graph binding. */
 static GraphStatus process_one_node(RuntimeNodeInstance *node,
                                     const AweProcessCtx *ctx) {
   if (!node || !ctx) {
@@ -818,7 +831,8 @@ GraphStatus graph_get_memory_requirements(
   if (!blob || !registry || !out_req) {
     return GRAPH_STATUS_BAD_ARG;
   }
-  if (!registry->modules || registry->module_count == 0u) {
+  if (!registry->modules || registry->module_count == 0u ||
+      !grph_module_registry_validate(registry)) {
     return GRAPH_STATUS_BAD_ARG;
   }
 
@@ -843,6 +857,8 @@ GraphStatus graph_get_memory_requirements(
     return status;
   }
 
+  /* Metadata sizing mirrors the bind order below so the caller can provision a
+     single metadata arena without hidden allocations at bind time. */
   metadata_bytes = 0u;
   metadata_bytes = align_up_u32(metadata_bytes, metadata_align());
   metadata_bytes += heap_count * (uint32_t)sizeof(RuntimeHeap);
@@ -907,6 +923,8 @@ GraphStatus graph_bind_from_blob(const BlobView *blob,
   }
 
   {
+    /* The requirements pass is reused here both to validate host memory and to
+       keep bind-time layout consistent with the sizing contract in the header. */
     uint32_t heap_required_stack[req.num_heaps];
     heap_required_bytes = heap_required_stack;
     status = graph_get_memory_requirements(blob, registry, &req, heap_required_bytes,
@@ -992,6 +1010,8 @@ GraphStatus graph_unbind(GraphInstance *graph) {
   if (!graph) {
     return GRAPH_STATUS_BAD_ARG;
   }
+  /* Unbind is bookkeeping-only cleanup. The host retains ownership of every
+     memory region that was provided during graph_bind_from_blob(). */
   unbind_initialized_nodes(graph);
   memset(graph, 0, sizeof(*graph));
   return GRAPH_STATUS_OK;

@@ -3,6 +3,8 @@
 
 #include "module_abi.h"
 
+extern const AweModuleDescriptor g_sum2_desc;
+
 const AweModuleDescriptor*
 awe_get_sum2_module_descriptor(
     uint32_t abi_major,

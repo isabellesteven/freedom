@@ -3,6 +3,7 @@
 #include "modules/module_abi.h"
 #include "modules/sum2/sum2.h"
 #include "runtime/engine/graph_instance.h"
+#include "runtime/engine/module_registry.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -82,9 +83,6 @@ static int read_file_bytes(const char *path, uint8_t *out, size_t cap, size_t *o
   return 1;
 }
 
-extern const AweModuleDescriptor *awe_get_module_descriptor(uint32_t abi_major,
-                                                            uint32_t abi_minor);
-
 static int bind_graph_from_blob(const uint8_t *blob_bytes, size_t blob_size,
                                 uint32_t io_heap_size, GraphInstance *out_graph,
                                 uint8_t *io_heap) {
@@ -92,8 +90,7 @@ static int bind_graph_from_blob(const uint8_t *blob_bytes, size_t blob_size,
   static uint8_t state_mem[STATE_CAP];
   static uint8_t state_heap[STATE_HEAP_CAP];
   static uint8_t param_heap[PARAM_HEAP_CAP];
-  const AweModuleDescriptor *modules[2];
-  ModuleRegistry registry;
+  const ModuleRegistry *registry;
   RuntimeHostConfig host_cfg;
   RuntimeMemoryConfig mem_cfg;
   BlobView blob;
@@ -106,9 +103,8 @@ static int bind_graph_from_blob(const uint8_t *blob_bytes, size_t blob_size,
     return 0;
   }
 
-  modules[0] = awe_get_module_descriptor(AWE_ABI_MAJOR, AWE_ABI_MINOR);
-  modules[1] = awe_get_sum2_module_descriptor(AWE_ABI_MAJOR, AWE_ABI_MINOR);
-  if (!modules[0] || !modules[1]) {
+  registry = grph_builtin_module_registry();
+  if (!registry || !grph_module_registry_validate(registry)) {
     fprintf(stderr, "module registry incomplete\n");
     return 0;
   }
@@ -120,8 +116,6 @@ static int bind_graph_from_blob(const uint8_t *blob_bytes, size_t blob_size,
   memset(param_heap, 0, sizeof(param_heap));
   memset(out_graph, 0, sizeof(*out_graph));
 
-  registry.modules = modules;
-  registry.module_count = 2u;
   host_cfg.base_block_frames = BLOCK_FRAMES;
 
   heap_bases[0] = io_heap;
@@ -139,7 +133,7 @@ static int bind_graph_from_blob(const uint8_t *blob_bytes, size_t blob_size,
   mem_cfg.heap_sizes = heap_sizes;
   mem_cfg.num_heaps = 3u;
 
-  return graph_bind_from_blob(&blob, &registry, &host_cfg, &mem_cfg, out_graph) ==
+  return graph_bind_from_blob(&blob, registry, &host_cfg, &mem_cfg, out_graph) ==
          GRAPH_STATUS_OK;
 }
 

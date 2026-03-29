@@ -1,6 +1,7 @@
 /* Verifies graph_get_memory_requirements() against a known reference blob.
    It checks aggregate metadata, state, and heap sizing before any binding occurs. */
 #include "runtime/engine/graph_instance.h"
+#include "runtime/engine/module_registry.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -169,9 +170,6 @@ static size_t build_reference_blob(uint8_t *buf, size_t cap) {
   return at + 4u;
 }
 
-extern const AweModuleDescriptor *awe_get_module_descriptor(uint32_t abi_major,
-                                                            uint32_t abi_minor);
-
 int main(void) {
   uint8_t blob_bytes[512];
   size_t blob_size;
@@ -179,9 +177,7 @@ int main(void) {
   char err[256];
   GraphMemoryRequirements req;
   uint32_t heap_required[3];
-  const AweModuleDescriptor *gain_desc;
-  const AweModuleDescriptor *modules[1];
-  ModuleRegistry registry;
+  const ModuleRegistry *registry;
   GraphStatus status;
 
   blob_size = build_reference_blob(blob_bytes, sizeof(blob_bytes));
@@ -195,17 +191,13 @@ int main(void) {
     return 1;
   }
 
-  gain_desc = awe_get_module_descriptor(AWE_ABI_MAJOR, AWE_ABI_MINOR);
-  if (!gain_desc) {
-    fprintf(stderr, "gain descriptor unavailable\n");
+  registry = grph_builtin_module_registry();
+  if (!registry || !grph_module_registry_validate(registry)) {
+    fprintf(stderr, "built-in registry unavailable\n");
     return 1;
   }
 
-  modules[0] = gain_desc;
-  registry.modules = modules;
-  registry.module_count = 1u;
-
-  status = graph_get_memory_requirements(&blob, &registry, &req, heap_required, 3u);
+  status = graph_get_memory_requirements(&blob, registry, &req, heap_required, 3u);
   if (status != GRAPH_STATUS_OK) {
     fprintf(stderr, "graph_get_memory_requirements failed: %d\n", (int)status);
     return 1;

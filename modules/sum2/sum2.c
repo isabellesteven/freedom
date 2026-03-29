@@ -82,7 +82,7 @@ static void sum2_deinit(void* state)
     (void)state;
 }
 
-static const AweModuleDescriptor g_sum2_desc = {
+const AweModuleDescriptor g_sum2_desc = {
     .desc_bytes = sizeof(AweModuleDescriptor),
     .module_id = 0x00001002u,
     .ver_major = 1u,

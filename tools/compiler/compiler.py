@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .dsl_parser import Endpoint, Graph, IoDecl, NodeDecl, parse_dsl
+from .module_catalog import (
+    PinSpec,
+    SignalType,
+    get_module_spec,
+    require_module_spec,
+)
 
 
 SECT_REQUIRES = 1
@@ -22,45 +28,17 @@ HEAP_PARAM_ID = 3
 BUFFER_TYPE_OWNED = 0
 BUFFER_TYPE_ALIAS = 2
 
-FMT_MAP = {
+GRAPH_IO_FMT_MAP = {
     "f32": 1,
     "s16": 2,
 }
-FMT_BYTES = {
-    "f32": 4,
-    "s16": 2,
+SIGNAL_TYPE_FMT_MAP = {
+    SignalType.FLOAT32: 1,
+    SignalType.FIXED32: 3,
 }
-
-
-@dataclass(frozen=True)
-class ModuleSpec:
-    module_id: int
-    input_pins: Tuple[str, ...]
-    output_pins: Tuple[str, ...]
-    state_bytes: int
-    state_align: int
-    caps: int
-    allow_inplace_io0: bool = False
-
-
-MODULE_SPECS: Dict[str, ModuleSpec] = {
-    "Gain": ModuleSpec(
-        module_id=0x00001001,
-        input_pins=("in",),
-        output_pins=("out",),
-        state_bytes=16,
-        state_align=16,
-        caps=0,
-        allow_inplace_io0=True,
-    ),
-    "Sum2": ModuleSpec(
-        module_id=0x00001002,
-        input_pins=("a", "b"),
-        output_pins=("out",),
-        state_bytes=4,
-        state_align=4,
-        caps=0,
-    ),
+SIGNAL_TYPE_BYTES = {
+    SignalType.FLOAT32: 4,
+    SignalType.FIXED32: 4,
 }
 
 
@@ -119,6 +97,12 @@ class ResolvedDest:
 
 
 @dataclass(frozen=True)
+class EndpointProps:
+    signal_type: SignalType
+    channels: int
+
+
+@dataclass(frozen=True)
 class BufferRecord:
     buffer_id: int
     buffer_type: int
@@ -171,7 +155,37 @@ def _fmt_name(fmt: int) -> str:
         return "F32"
     if fmt == 2:
         return "S16"
+    if fmt == 3:
+        return "FIXED32"
     return "UNK"
+
+
+def _io_signal_type(sample_fmt: str) -> SignalType:
+    # Graph IO declarations are the current bridge from DSL formats into the
+    # compiler's semantic pin model. The runtime still has graph-wide sample
+    # format limits, but connection compatibility is checked in signal-type
+    # space before lowering.
+    if sample_fmt == "f32":
+        return SignalType.FLOAT32
+    if sample_fmt == "s16":
+        return SignalType.FIXED32
+    raise ValueError(f"unsupported sample format: {sample_fmt}")
+
+
+def _io_pin_spec(io: IoDecl, pin_name: str) -> PinSpec:
+    return PinSpec(
+        name=pin_name,
+        signal_type=_io_signal_type(io.sample_fmt),
+        channels=io.channels,
+    )
+
+
+def _pin_props(pin: PinSpec) -> EndpointProps:
+    return EndpointProps(signal_type=pin.signal_type, channels=pin.channels)
+
+
+def _buffer_size_bytes(props: EndpointProps, frames: int) -> int:
+    return frames * props.channels * SIGNAL_TYPE_BYTES[props.signal_type]
 
 
 def _resolve_source(endpoint: Endpoint, ios: Mapping[str, IoDecl],
@@ -185,11 +199,9 @@ def _resolve_source(endpoint: Endpoint, ios: Mapping[str, IoDecl],
         return ResolvedSource("io", endpoint.name, "out")
     if endpoint.name in nodes:
         node = nodes[endpoint.name]
-        spec = MODULE_SPECS.get(node.module)
-        if spec is None:
-            raise ValueError(f"unsupported module: {node.module}")
-        pin = endpoint.pin or (spec.output_pins[0] if len(spec.output_pins) == 1 else None)
-        if pin is None or pin not in spec.output_pins:
+        spec = require_module_spec(node.module)
+        pin = endpoint.pin or (spec.outputs[0].name if len(spec.outputs) == 1 else None)
+        if pin is None or spec.find_output(pin) is None:
             raise ValueError(f"invalid output pin {endpoint.name}.{endpoint.pin}")
         return ResolvedSource("node", endpoint.name, pin)
     raise ValueError(f"unknown source endpoint: {endpoint.name}")
@@ -206,14 +218,64 @@ def _resolve_dest(endpoint: Endpoint, ios: Mapping[str, IoDecl],
         return ResolvedDest("io", endpoint.name, "in")
     if endpoint.name in nodes:
         node = nodes[endpoint.name]
-        spec = MODULE_SPECS.get(node.module)
-        if spec is None:
-            raise ValueError(f"unsupported module: {node.module}")
-        pin = endpoint.pin or (spec.input_pins[0] if len(spec.input_pins) == 1 else None)
-        if pin is None or pin not in spec.input_pins:
+        spec = require_module_spec(node.module)
+        pin = endpoint.pin or (spec.inputs[0].name if len(spec.inputs) == 1 else None)
+        if pin is None or spec.find_input(pin) is None:
             raise ValueError(f"invalid input pin {endpoint.name}.{endpoint.pin}")
         return ResolvedDest("node", endpoint.name, pin)
     raise ValueError(f"unknown destination endpoint: {endpoint.name}")
+
+
+def _source_pin_spec(src: ResolvedSource, ios: Mapping[str, IoDecl],
+                     nodes: Mapping[str, NodeDecl]) -> PinSpec:
+    if src.kind == "io":
+        return _io_pin_spec(ios[src.owner], src.pin)
+    pin = require_module_spec(nodes[src.owner].module).find_output(src.pin)
+    if pin is None:
+        raise ValueError(f"invalid output pin {src.owner}.{src.pin}")
+    return pin
+
+
+def _dest_pin_spec(dst: ResolvedDest, ios: Mapping[str, IoDecl],
+                   nodes: Mapping[str, NodeDecl]) -> PinSpec:
+    if dst.kind == "io":
+        return _io_pin_spec(ios[dst.owner], dst.pin)
+    pin = require_module_spec(nodes[dst.owner].module).find_input(dst.pin)
+    if pin is None:
+        raise ValueError(f"invalid input pin {dst.owner}.{dst.pin}")
+    return pin
+
+
+def _source_label(src: ResolvedSource) -> str:
+    if src.kind == "io":
+        return f"graph input {src.owner}"
+    return f"{src.owner}.{src.pin}"
+
+
+def _dest_label(dst: ResolvedDest) -> str:
+    if dst.kind == "io":
+        return f"graph output {dst.owner}"
+    return f"{dst.owner}.{dst.pin}"
+
+
+def _validate_connection_compatibility(src: ResolvedSource, dst: ResolvedDest,
+                                       ios: Mapping[str, IoDecl],
+                                       nodes: Mapping[str, NodeDecl]) -> None:
+    src_props = _pin_props(_source_pin_spec(src, ios, nodes))
+    dst_props = _pin_props(_dest_pin_spec(dst, ios, nodes))
+    src_label = _source_label(src)
+    dst_label = _dest_label(dst)
+
+    if src_props.signal_type != dst_props.signal_type:
+        raise ValueError(
+            f"type mismatch: {src_label} ({src_props.signal_type.value}) -> "
+            f"{dst_label} ({dst_props.signal_type.value})"
+        )
+    if src_props.channels != dst_props.channels:
+        raise ValueError(
+            f"channel mismatch: {src_label} ({src_props.channels} ch) -> "
+            f"{dst_label} ({dst_props.channels} ch)"
+        )
 
 
 def _validate_graph_shape(graph: Graph, inputs: Sequence[IoDecl], outputs: Sequence[IoDecl]) -> None:
@@ -233,8 +295,9 @@ def _validate_graph_shape(graph: Graph, inputs: Sequence[IoDecl], outputs: Seque
 
     # Temporary compiler limit: one block shape per graph keeps runtime buffer
     # layout simple until typed per-edge formats are introduced.
-    if ref.sample_fmt not in FMT_MAP:
+    if ref.sample_fmt not in GRAPH_IO_FMT_MAP:
         raise ValueError(f"unsupported sample format: {ref.sample_fmt}")
+    _io_signal_type(ref.sample_fmt)
 
 
 def _graph_maps(graph: Graph) -> Tuple[Dict[str, IoDecl], Dict[str, NodeDecl]]:
@@ -289,11 +352,10 @@ def _gain_init_and_defaults(node: NodeDecl) -> Tuple[bytes, bytes]:
 def _module_init_and_defaults(node: NodeDecl) -> Tuple[bytes, bytes]:
     if node.module == "Gain":
         return _gain_init_and_defaults(node)
-    if node.module == "Sum2":
-        if node.params:
-            raise ValueError("Sum2 does not accept parameters")
-        return b"", b""
-    raise ValueError(f"unsupported module: {node.module}")
+    require_module_spec(node.module)
+    if node.params:
+        raise ValueError(f"{node.module} does not accept parameters")
+    return b"", b""
 
 
 def _build_graph_connections(graph: Graph) -> Tuple[
@@ -310,6 +372,10 @@ def _build_graph_connections(graph: Graph) -> Tuple[
     for conn in graph.connects:
         src = _resolve_source(conn.src, ios_by_name, nodes_by_name)
         dst = _resolve_dest(conn.dst, ios_by_name, nodes_by_name)
+        # Endpoint resolution identifies the exact pin on each side, including
+        # the per-pin semantic properties declared in the module catalog. Edge
+        # compatibility is enforced here before any scheduling or buffer lowering.
+        _validate_connection_compatibility(src, dst, ios_by_name, nodes_by_name)
 
         if dst.kind == "node":
             key = (dst.owner, dst.pin)
@@ -326,12 +392,10 @@ def _build_graph_connections(graph: Graph) -> Tuple[
         consumer_count[src] = consumer_count.get(src, 0) + 1
 
     for node in graph.nodes:
-        spec = MODULE_SPECS.get(node.module)
-        if spec is None:
-            raise ValueError(f"unsupported module: {node.module}")
-        for pin in spec.input_pins:
-            if (node.name, pin) not in node_inputs:
-                raise ValueError(f"missing input: {node.name}.{pin}")
+        spec = require_module_spec(node.module)
+        for pin in spec.inputs:
+            if (node.name, pin.name) not in node_inputs:
+                raise ValueError(f"missing input: {node.name}.{pin.name}")
 
     for io in graph.ios:
         if io.direction == "output" and io.name not in graph_outputs:
@@ -431,8 +495,6 @@ def _lower_graph(graph: Graph) -> LoweredGraph:
     schedule_order = _topological_order(graph, deps)
 
     io_shape = inputs[0]
-    block_bytes = io_shape.block * io_shape.channels * FMT_BYTES[io_shape.sample_fmt]
-    fmt = FMT_MAP[io_shape.sample_fmt]
     buf_slots = 2
     next_offset = 0
     node_id_by_name = {node.name: 10 + (index * 10) for index, node in enumerate(graph.nodes)}
@@ -442,12 +504,16 @@ def _lower_graph(graph: Graph) -> LoweredGraph:
     signal_buffer_id: Dict[ResolvedSource, int] = {}
     physical_buffer: Dict[int, BufferRecord] = {}
 
-    def allocate_buffer(buffer_type: int, alias_buffer_id: Optional[int] = None) -> int:
+    def allocate_buffer(props: EndpointProps, buffer_type: int,
+                        alias_buffer_id: Optional[int] = None) -> int:
         nonlocal next_offset
         buffer_id = len(buffers) + 1
         if alias_buffer_id is None:
             offset = next_offset
-            next_offset = _pad_to(next_offset + (block_bytes * buf_slots), 16)
+            next_offset = _pad_to(
+                next_offset + (_buffer_size_bytes(props, io_shape.block) * buf_slots),
+                16,
+            )
         else:
             offset = physical_buffer[alias_buffer_id].offset_bytes
         record = BufferRecord(
@@ -455,10 +521,10 @@ def _lower_graph(graph: Graph) -> LoweredGraph:
             buffer_type=buffer_type,
             alias_of=alias_buffer_id or 0,
             offset_bytes=offset,
-            size_bytes=block_bytes,
-            channels=io_shape.channels,
+            size_bytes=_buffer_size_bytes(props, io_shape.block),
+            channels=props.channels,
             frames=io_shape.block,
-            fmt=fmt,
+            fmt=SIGNAL_TYPE_FMT_MAP[props.signal_type],
             slots=buf_slots,
         )
         buffers.append(record)
@@ -467,32 +533,38 @@ def _lower_graph(graph: Graph) -> LoweredGraph:
 
     for io in inputs:
         source = ResolvedSource("io", io.name, "out")
-        signal_buffer_id[source] = allocate_buffer(BUFFER_TYPE_OWNED)
+        signal_buffer_id[source] = allocate_buffer(
+            _pin_props(_io_pin_spec(io, "out")),
+            BUFFER_TYPE_OWNED,
+        )
 
     node_records: List[NodeRecord] = []
     node_schedule: List[ScheduleRecord] = []
 
     for op_index, node_name in enumerate(schedule_order):
         node = node_by_name[node_name]
-        spec = MODULE_SPECS[node.module]
+        spec = require_module_spec(node.module)
+        # Lowering consumes per-pin specs from the catalog rather than any
+        # module-wide type assumption so future heterogeneous-pin modules stay
+        # localized to catalog entries and semantic checks.
         input_buffer_ids: List[int] = []
-        for pin in spec.input_pins:
-            input_source = node_inputs[(node.name, pin)]
+        for pin in spec.inputs:
+            input_source = node_inputs[(node.name, pin.name)]
             input_buffer_ids.append(signal_buffer_id[input_source])
 
         output_buffer_ids: List[int] = []
-        for output_index, pin in enumerate(spec.output_pins):
-            source = ResolvedSource("node", node.name, pin)
+        for output_index, pin in enumerate(spec.outputs):
+            source = ResolvedSource("node", node.name, pin.name)
             alias_buffer_id = None
             if (
                 spec.allow_inplace_io0
                 and output_index == 0
                 and len(input_buffer_ids) > 0
-                and consumer_count[node_inputs[(node.name, spec.input_pins[0])]] == 1
+                and consumer_count[node_inputs[(node.name, spec.inputs[0].name)]] == 1
             ):
                 alias_buffer_id = input_buffer_ids[0]
             buffer_type = BUFFER_TYPE_ALIAS if alias_buffer_id is not None else BUFFER_TYPE_OWNED
-            buffer_id = allocate_buffer(buffer_type, alias_buffer_id)
+            buffer_id = allocate_buffer(_pin_props(pin), buffer_type, alias_buffer_id)
             signal_buffer_id[source] = buffer_id
             output_buffer_ids.append(buffer_id)
 
@@ -520,9 +592,9 @@ def _lower_graph(graph: Graph) -> LoweredGraph:
     for io in outputs:
         source = graph_outputs[io.name]
         source_buffer_id = signal_buffer_id[source]
-        allocate_buffer(BUFFER_TYPE_ALIAS, source_buffer_id)
+        allocate_buffer(_pin_props(_io_pin_spec(io, "in")), BUFFER_TYPE_ALIAS, source_buffer_id)
 
-    used_specs = tuple(sorted({MODULE_SPECS[node.module].module_id for node in graph.nodes}))
+    used_specs = tuple(sorted({require_module_spec(node.module).module_id for node in graph.nodes}))
     heaps = (
         (HEAP_IO_ID, "IO", _pad_to(next_offset, 16), 16),
         (HEAP_STATE_ID, "STATE", 256, 16),

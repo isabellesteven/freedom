@@ -1,4 +1,4 @@
-#include "module_abi.h"
+#include "gain.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -8,11 +8,8 @@
    Module identity
    ------------------------------------------------------------------ */
 
-#define GAIN_MODULE_ID  0x00001001u
 #define GAIN_VER_MAJOR  1u
 #define GAIN_VER_MINOR  0u
-
-#define GAIN_PARAM_GAIN_DB  1u
 
 /* ------------------------------------------------------------------
    Init blob / param encoding
@@ -199,7 +196,7 @@ static void gain_deinit(void* state)
    Descriptor
    ------------------------------------------------------------------ */
 
-static const AweModuleDescriptor g_gain_desc = {
+const AweModuleDescriptor g_gain_desc = {
     .desc_bytes = sizeof(AweModuleDescriptor),
 
     .module_id = GAIN_MODULE_ID,

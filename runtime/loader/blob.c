@@ -1,5 +1,13 @@
 #include "runtime/loader/blob.h"
 
+/*
+ * Graph blob loader and text renderer.
+ *
+ * This module parses immutable blob bytes, validates file and section integrity,
+ * builds a non-owning grph_blob_view, enforces required-section policy, decodes
+ * GRAPH_CONFIG, and renders either human or canonical text output.
+ */
+
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -9,6 +17,8 @@
 #define GRPH_SECTION_HEADER_BYTES 16u
 #define GRPH_TRAILER_CRC_BYTES 4u
 
+/* Blob bytes are packed little-endian. These helpers decode them without
+   assuming host alignment or struct layout. */
 static uint16_t rd_u16(const uint8_t *p) {
   return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
 }
@@ -183,6 +193,8 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
                 out->file_bytes, data_bytes);
   }
 
+  /* The file trailer CRC always covers the entire blob minus the final CRC
+     word. Section CRCs are optional and, when present, cover payload only. */
   out->file_crc32 = rd_u32(data + data_bytes - GRPH_TRAILER_CRC_BYTES);
   {
     uint32_t got = crc32_eth(data, data_bytes - GRPH_TRAILER_CRC_BYTES);
@@ -195,6 +207,8 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
   }
 
   at = GRPH_FILE_HEADER_BYTES;
+  /* Parse headers first, then populate the typed view by pointing into the
+     original blob bytes rather than copying payloads out. */
   while (at < data_bytes - GRPH_TRAILER_CRC_BYTES) {
     grph_blob_section s;
     const uint8_t *hdr;
@@ -292,12 +306,16 @@ int grph_blob_parse(const uint8_t *data, size_t data_bytes, grph_blob_view *out,
   if (at != data_bytes - GRPH_TRAILER_CRC_BYTES) {
     return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT, "trailing data before crc");
   }
+  /* Required-section presence is enforced here as loader policy so downstream
+     code can treat a successful parse as a semantically usable blob view. */
   if (!out->requires || !out->heaps || !out->buffers || !out->nodes ||
       !out->schedule || !out->param_defaults || !out->graph_config) {
     return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
                 "missing required section");
   }
 
+  /* GRAPH_CONFIG is interpreted as typed runtime configuration during parse so
+     callers do not need to re-decode or re-validate this section later. */
   if (out->graph_config->payload_bytes != 8u) {
     return fail(err, err_cap, GRPH_BLOB_ERR_FORMAT,
                 "GRAPH_CONFIG payload_bytes=%" PRIu32 " expected 8",
@@ -750,6 +768,8 @@ int grph_blob_dump(FILE *out, const uint8_t *data, size_t data_bytes,
   grph_blob_view blob;
   char abi[5];
   int rc;
+  /* This is the central text rendering path. Human mode favors readability,
+     while canonical mode emits normalized output for deterministic comparison. */
   if (!out) {
     return fail(err, err_cap, GRPH_BLOB_ERR_ARG, "null output stream");
   }
@@ -844,6 +864,7 @@ int grph_blob_dump(FILE *out, const uint8_t *data, size_t data_bytes,
 
 int grph_blob_disassemble(FILE *out, const uint8_t *data, size_t data_bytes,
                           char *err, size_t err_cap) {
+  /* Thin convenience wrapper for the default readable rendering. */
   return grph_blob_dump(out, data, data_bytes, GRPH_BLOB_TEXT_HUMAN, err,
                         err_cap);
 }
@@ -851,6 +872,7 @@ int grph_blob_disassemble(FILE *out, const uint8_t *data, size_t data_bytes,
 int grph_blob_disassemble_canonical(FILE *out, const uint8_t *data,
                                     size_t data_bytes, char *err,
                                     size_t err_cap) {
+  /* Thin convenience wrapper for canonical normalized text output. */
   return grph_blob_dump(out, data, data_bytes, GRPH_BLOB_TEXT_CANONICAL, err,
                         err_cap);
 }
