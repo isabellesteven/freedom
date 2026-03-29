@@ -21,3 +21,15 @@ bin/test_graph_memory_requirements.exe
 bin/test_graph_process.exe
 bin/test_module_registry.exe
 bin/test_runtime_from_blob.exe
+bin/file_host.exe
+temp_validate/debug_file_host/gain.grph
+temp_validate/debug_file_host/in.wav
+temp_validate/debug_file_host/out.wav
+temp_validate/file_host/bad.grph
+temp_validate/file_host/gain.grph
+temp_validate/file_host/input.wav
+temp_validate/file_host/output.wav
+temp_validate/file_host/partial_out.wav
+temp_validate/file_host/partial.wav
+temp_validate/file_host/unsupported.wav
+tools/compiler/__pycache__/module_catalog.cpython-312.pyc
